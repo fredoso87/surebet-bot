@@ -13,7 +13,7 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 ODDS_API_KEY = "2a5684033edc1582d1e7befd417fda79"  # <-- coloca aquí tu API key real de https://the-odds-api.com
 ORACLE_USER = "system"
 ORACLE_PASS = "Indra123"
-ORACLE_DSN = "localhost:1521/ORCL"
+ORACLE_DSN = "127.0.0.1:1521/ORCL"
 PROFIT_THRESHOLD = 1.0
 INTERVAL_MINUTES = 5
 REGION = "eu"
