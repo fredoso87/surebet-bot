@@ -1,0 +1,4 @@
+requests
+schedule
+oracledb
+pytz
