@@ -1,0 +1,20 @@
+# 🤖 Surebet Bot (Render + PostgreSQL + The Odds API)
+
+Bot que detecta **arbitrajes deportivos (surebets)** usando datos en tiempo real de [The Odds API](https://the-odds-api.com).
+
+### 🚀 Funciones principales
+- Consulta cuotas de varias casas de apuestas.
+- Detecta oportunidades de arbitraje (ganancia garantizada).
+- Inserta resultados en una base PostgreSQL alojada en Render.
+- Repite el proceso automáticamente cada 10 minutos.
+
+### 🧱 Configuración de entorno
+
+Edita en `main.py` tus credenciales:
+
+```python
+PG_USER = "surebet_db_user"
+PG_PASS = "bphDIBxCdPckefLT0SIOpB2WCEtiCCMU"
+PG_HOST = "dpg-d4b25nggjchc73f7d1o0-a"
+PG_DB   = "surebet_db"
+ODDS_API_KEY = "2a5684033edc1582d1e7befd417fda79"

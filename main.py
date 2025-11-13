@@ -1,33 +1,32 @@
 import requests
-import oracledb
-from datetime import datetime, timezone
+import psycopg2
 import time
-import urllib3
+from datetime import datetime, timezone
 
-# Desactiva advertencias SSL
-urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-
-# ================================
-# CONFIGURACIÓN
-# ================================
-ODDS_API_KEY = "2a5684033edc1582d1e7befd417fda79"  # <-- coloca aquí tu API key real de https://the-odds-api.com
-ORACLE_USER = "system"
-ORACLE_PASS = "Indra123"
-ORACLE_DSN = "127.0.0.1:1521/ORCL"
-PROFIT_THRESHOLD = 1.0
-INTERVAL_MINUTES = 5
+# ======================================
+# 🔧 CONFIGURACIÓN
+# ======================================
+ODDS_API_KEY = "2a5684033edc1582d1e7befd417fda79"  # tu key de The Odds API
+SPORTS = ["soccer", "basketball", "tennis"]
 REGION = "eu"
+PROFIT_THRESHOLD = 1.0
+INTERVAL_MINUTES = 10
 
-SPORTS = [
-    {"name": "soccer", "markets": ["h2h", "totals"]},
-    {"name": "tennis", "markets": ["h2h"]},
-    {"name": "basketball", "markets": ["h2h", "totals"]}
-]
+# PostgreSQL (Render)
+PG_USER = "surebet_db_user"
+PG_PASS = "bphDIBxCdPckefLT0SIOpB2WCEtiCCMU"
+PG_HOST = "dpg-d4b25nggjchc73f7d1o0-a"
+PG_PORT = "5432"
+PG_DB = "surebet_db"
 
-# ================================
-# FUNCIÓN: Obtener cuotas desde OddsAPI con control SSL
-# ================================
+# ======================================
+# 🔍 FUNCIONES
+# ======================================
+
 def get_odds_from_oddsapi(sport, markets):
+    """
+    Consulta la API de The Odds API para un deporte y mercado específico.
+    """
     results = []
     for market in markets:
         url = (
@@ -35,160 +34,110 @@ def get_odds_from_oddsapi(sport, markets):
             f"?regions={REGION}&markets={market}&oddsFormat=decimal&apiKey={ODDS_API_KEY}"
         )
         try:
-            # Intentar conexión normal
-            resp = requests.get(url, timeout=30)
-            resp.raise_for_status()
+            response = requests.get(url, timeout=30, verify=False)
+            if response.status_code == 200:
+                data = response.json()
+                results.extend(data)
+            else:
+                print(f"⚠️ Error HTTP {response.status_code} para {sport} ({market})")
         except requests.exceptions.SSLError:
-            # Si falla SSL, reintentar sin verificación
             print(f"⚠️ Advertencia SSL — usando conexión sin verificación para {url}")
-            resp = requests.get(url, timeout=30, verify=False)
+            try:
+                response = requests.get(url, timeout=30, verify=False)
+                if response.status_code == 200:
+                    data = response.json()
+                    results.extend(data)
+            except Exception as e:
+                print(f"⚠️ Error al procesar {sport} ({market}): {e}")
         except Exception as e:
             print(f"⚠️ Error al obtener cuotas de {sport} ({market}): {e}")
-            continue
-
-        try:
-            data = resp.json()
-            for match in data:
-                match["market_type"] = market
-            results.extend(data)
-        except Exception as e:
-            print(f"⚠️ Error al procesar JSON de {sport} ({market}): {e}")
     return results
 
 
-# ================================
-# FUNCIÓN: Calcular apuestas
-# ================================
-def calc_stakes(odds):
-    inv_sum = sum(1 / o for o in odds)
-    total = 100
-    stakes = [(total / (o * inv_sum)) for o in odds]
-    profits = [stakes[i] * odds[i] for i in range(len(odds))]
-    gain = min(profits) - total
-    profit_percent = round((gain / total) * 100, 3)
-    return stakes, profit_percent
-
-
-# ================================
-# FUNCIÓN: Detectar arbitrajes
-# ================================
-def find_surebets(data, sport):
+def find_surebets(events):
+    """
+    Detecta arbitrajes comparando las mejores cuotas de cada resultado.
+    """
     surebets = []
-    for ev in data:
+    for ev in events:
         try:
             home = ev.get("home_team", "")
             away = ev.get("away_team", "")
-            match_id = ev.get("id", "")
-            market = ev.get("market_type", "")
+            sport = ev.get("sport_key", "unknown")
             bookmakers = ev.get("bookmakers", [])
-            if not bookmakers:
-                continue
 
-            best_home = best_draw = best_away = 0
-            bm_home = bm_draw = bm_away = ""
-
+            best_odds = {}
             for bm in bookmakers:
-                key = bm.get("key", "")
+                bm_name = bm.get("title", "")
                 markets = bm.get("markets", [])
-                if not markets:
-                    continue
+                for market in markets:
+                    for outcome in market.get("outcomes", []):
+                        name = outcome.get("name", "")
+                        price = float(outcome.get("price", 0))
+                        if name not in best_odds or price > best_odds[name]["price"]:
+                            best_odds[name] = {"price": price, "bookmaker": bm_name}
 
-                outcomes = markets[0].get("outcomes", [])
-                for out in outcomes:
-                    name = out.get("name", "")
-                    price = out.get("price", 0)
-                    if not price:
-                        continue
-
-                    if market == "h2h":
-                        if name.lower() in [home.lower(), "home"]:
-                            if price > best_home:
-                                best_home, bm_home = price, key
-                        elif name.lower() in [away.lower(), "away"]:
-                            if price > best_away:
-                                best_away, bm_away = price, key
-                        elif name.lower() == "draw":
-                            if price > best_draw:
-                                best_draw, bm_draw = price, key
-
-                    elif market == "totals":
-                        if "over" in name.lower() and price > best_home:
-                            best_home, bm_home = price, key
-                        elif "under" in name.lower() and price > best_away:
-                            best_away, bm_away = price, key
-
-            odds = []
-            if best_home:
-                odds.append(best_home)
-            if market == "h2h" and best_draw:
-                odds.append(best_draw)
-            if best_away:
-                odds.append(best_away)
-
-            if len(odds) >= 2:
-                stakes, profit_percent = calc_stakes(odds)
-                if profit_percent > PROFIT_THRESHOLD:
-                    recommended = "1" if best_home >= max(best_away, best_draw or 0) else (
-                        "2" if best_away >= max(best_home, best_draw or 0) else "X"
-                    )
-                    surebets.append({
-                        "sport": sport,
-                        "match_id": match_id,
-                        "home_team": home,
-                        "away_team": away,
-                        "market": market,
-                        "odd_home": best_home,
-                        "odd_draw": best_draw if market == "h2h" else None,
-                        "odd_away": best_away,
-                        "bm_home": bm_home,
-                        "bm_draw": bm_draw,
-                        "bm_away": bm_away,
-                        "profit_percent": profit_percent,
-                        "stake_home": stakes[0],
-                        "stake_draw": stakes[1] if market == "h2h" and len(stakes) == 3 else None,
-                        "stake_away": stakes[-1],
-                        "recommended_result": recommended,
-                        "found_time": datetime.now(timezone.utc)
-                    })
+            if len(best_odds) >= 2:
+                inv_sum = sum(1 / v["price"] for v in best_odds.values())
+                if inv_sum < 1:
+                    profit = (1 / inv_sum - 1) * 100
+                    if profit >= PROFIT_THRESHOLD:
+                        surebets.append({
+                            "sport": sport,
+                            "team1": home,
+                            "team2": away,
+                            "market": ev.get("sport_title", ""),
+                            "profit_percent": round(profit, 2),
+                            "details": best_odds,
+                            "found_time": datetime.now(timezone.utc)
+                        })
         except Exception as e:
-            print(f"⚠️ Error procesando evento {ev.get('id')}: {e}")
+            print(f"⚠️ Error procesando evento: {e}")
     return surebets
 
 
-# ================================
-# FUNCIÓN: Insertar en Oracle
-# ================================
-def insert_surebets_to_oracle(surebets):
-    if not surebets:
-        return
-
+def insert_surebets_postgres(surebets):
+    """
+    Inserta los arbitrajes detectados en PostgreSQL.
+    """
+    conn = None
+    cursor = None
     try:
-        conn = oracledb.connect(user=ORACLE_USER, password=ORACLE_PASS, dsn=ORACLE_DSN)
+        conn = psycopg2.connect(
+            host=PG_HOST,
+            database=PG_DB,
+            user=PG_USER,
+            password=PG_PASS,
+            port=PG_PORT
+        )
         cursor = conn.cursor()
 
-        sql = """
-        INSERT INTO surebets (
-            sport, match_id, home_team, away_team, market,
-            odd_home, odd_draw, odd_away,
-            bm_home, bm_draw, bm_away,
-            profit_percent, stake_home, stake_draw, stake_away,
-            recommended_result, found_time
-        ) VALUES (
-            :sport, :match_id, :home_team, :away_team, :market,
-            :odd_home, :odd_draw, :odd_away,
-            :bm_home, :bm_draw, :bm_away,
-            :profit_percent, :stake_home, :stake_draw, :stake_away,
-            :recommended_result, :found_time
-        )
-        """
-
         for sb in surebets:
-            cursor.execute(sql, sb)
+            try:
+                cursor.execute("""
+                    INSERT INTO surebets (
+                        sport, team1, team2, market, profit_percent,
+                        bookmaker1, odd1, bookmaker2, odd2, found_time
+                    ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                """, (
+                    sb["sport"],
+                    sb["team1"],
+                    sb["team2"],
+                    sb["market"],
+                    sb["profit_percent"],
+                    list(sb["details"].values())[0]["bookmaker"],
+                    list(sb["details"].values())[0]["price"],
+                    list(sb["details"].values())[1]["bookmaker"],
+                    list(sb["details"].values())[1]["price"],
+                    sb["found_time"]
+                ))
+            except Exception as e:
+                print(f"⚠️ Error al insertar registro: {e}")
 
         conn.commit()
-        print(f"✅ {len(surebets)} surebets insertadas correctamente en Oracle.")
+        print(f"✅ {len(surebets)} arbitrajes insertados correctamente en PostgreSQL.")
     except Exception as e:
-        print(f"⚠️ Error al insertar en Oracle: {e}")
+        print(f"⚠️ Error PostgreSQL: {e}")
     finally:
         if cursor:
             cursor.close()
@@ -196,37 +145,35 @@ def insert_surebets_to_oracle(surebets):
             conn.close()
 
 
-# ================================
-# CICLO PRINCIPAL
-# ================================
 def main():
-    print("\n🚀 Iniciando bot de arbitraje (OddsAPI + Oracle + SSL safe)")
-    print("Deportes configurados:")
-    for s in SPORTS:
-        print(f"  - {s['name']} ({', '.join(s['markets'])})")
+    """
+    Proceso principal: consulta, detecta e inserta surebets.
+    """
+    print(f"\n[{datetime.now()}] 🔍 Iniciando búsqueda de surebets...")
+    all_surebets = []
 
-    while True:
-        for s in SPORTS:
-            sport = s["name"]
-            markets = s["markets"]
-            print(f"\n[{datetime.now()}] 🔍 Analizando {sport.upper()}...")
+    for sport in SPORTS:
+        print(f"[{datetime.now()}] Analizando {sport.upper()}...")
+        events = get_odds_from_oddsapi(sport, ["h2h", "totals"])
+        surebets = find_surebets(events)
+        if surebets:
+            print(f"💰 {len(surebets)} surebets encontradas en {sport}.")
+            all_surebets.extend(surebets)
+        else:
+            print(f"— No se encontraron surebets en {sport}.")
 
-            data = get_odds_from_oddsapi(sport, markets)
-            print(f"Eventos obtenidos: {len(data)}")
-
-            surebets = find_surebets(data, sport)
-            print(f"Surebets detectadas: {len(surebets)}")
-
-            for sb in surebets:
-                print(f"🏆 {sb['home_team']} vs {sb['away_team']} ({sb['market']}) | {sb['profit_percent']}%")
-            insert_surebets_to_oracle(surebets)
-
-        print(f"\n⏳ Esperando {INTERVAL_MINUTES} minutos antes del próximo ciclo...\n")
-        time.sleep(INTERVAL_MINUTES * 60)
+    if all_surebets:
+        insert_surebets_postgres(all_surebets)
+    else:
+        print("Sin resultados rentables este ciclo.")
 
 
-# ================================
-# EJECUCIÓN
-# ================================
+# ======================================
+# 🚀 CICLO AUTOMÁTICO
+# ======================================
 if __name__ == "__main__":
-    main()
+    print("🚀 Iniciando bot de arbitrajes (Render + PostgreSQL)...")
+    while True:
+        main()
+        print(f"⏳ Esperando {INTERVAL_MINUTES} minutos antes del próximo ciclo...\n")
+        time.sleep(INTERVAL_MINUTES * 60)
