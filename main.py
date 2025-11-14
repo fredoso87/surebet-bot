@@ -15,7 +15,7 @@ BET_AMOUNT = 500  # soles
 
 PG_USER = "surebet_db_user"
 PG_PASS = "bphDIBxCdPckefLT0SIOpB2WCEtiCCMU"
-PG_HOST = "dpg-d4b25nggjchc73f7d1o0-a.render.com"
+PG_HOST = "dpg-d4b25nggjchc73f7d1o0-a"
 PG_PORT = "5432"
 PG_DB = "surebet_db"
 
