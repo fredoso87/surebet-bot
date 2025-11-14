@@ -2,6 +2,8 @@ import requests
 import psycopg2
 import time
 from datetime import datetime, timezone
+from flask import Flask
+import threading
 
 # ======================================
 # 🔧 CONFIGURACIÓN DIRECTA (SIN ENV VARS)
@@ -13,7 +15,7 @@ REGION = "eu"
 PROFIT_THRESHOLD = 1.0
 INTERVAL_MINUTES = 10
 
-# PostgreSQL (Render) — DIRECTO EN EL CÓDIGO
+# PostgreSQL (Render)
 PG_USER = "surebet_db_user"
 PG_PASS = "bphDIBxCdPckefLT0SIOpB2WCEtiCCMU"
 PG_HOST = "dpg-d4b25nggjchc73f7d1o0-a"
@@ -150,9 +152,26 @@ def main():
         print("Sin resultados rentables este ciclo.")
 
 
-if __name__ == "__main__":
-    print("🚀 Iniciando bot de arbitrajes (Render)...")
+# ======================================
+# 🌐 FLASK SERVER (PARA RENDER WEB SERVICE)
+# ======================================
+
+app = Flask(__name__)
+
+@app.get("/")
+def home():
+    return "Surebet bot running on Render"
+
+def start_bot():
     while True:
         main()
         print(f"⏳ Esperando {INTERVAL_MINUTES} minutos antes del próximo ciclo...\n")
         time.sleep(INTERVAL_MINUTES * 60)
+
+
+if __name__ == "__main__":
+    # Iniciar bot en segundo plano
+    threading.Thread(target=start_bot, daemon=True).start()
+
+    # Servidor web que Render necesita
+    app.run(host="0.0.0.0", port=10000)
