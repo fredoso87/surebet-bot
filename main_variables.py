@@ -2,29 +2,33 @@ import requests
 import psycopg2
 import time
 from datetime import datetime, timezone
+import os
 
 # ======================================
-# 🔧 CONFIGURACIÓN DIRECTA (SIN ENV VARS)
+# 🔧 CONFIGURACIÓN
 # ======================================
 
-ODDS_API_KEY = "2a5684033edc1582d1e7befd417fda79"  # TheOddsAPI
+ODDS_API_KEY = os.getenv("ODDS_API_KEY")  # tu clave se pone en Render como env var
 SPORTS = ["soccer", "basketball", "tennis"]
 REGION = "eu"
 PROFIT_THRESHOLD = 1.0
 INTERVAL_MINUTES = 10
 
-# PostgreSQL (Render) — DIRECTO EN EL CÓDIGO
-PG_USER = "surebet_db_user"
-PG_PASS = "bphDIBxCdPckefLT0SIOpB2WCEtiCCMU"
-PG_HOST = "dpg-d4b25nggjchc73f7d1o0-a"
-PG_PORT = "5432"
-PG_DB = "surebet_db"
+# PostgreSQL (Render)
+PG_USER = os.getenv("PG_USER")
+PG_PASS = os.getenv("PG_PASS")
+PG_HOST = os.getenv("PG_HOST")
+PG_PORT = os.getenv("PG_PORT", "5432")
+PG_DB = os.getenv("PG_DB")
 
 # ======================================
 # 🔍 FUNCIONES
 # ======================================
 
 def get_odds_from_oddsapi(sport, markets):
+    """
+    Consulta la API de The Odds API para un deporte y mercado específico.
+    """
     results = []
     for market in markets:
         url = (
@@ -32,18 +36,23 @@ def get_odds_from_oddsapi(sport, markets):
             f"?regions={REGION}&markets={market}&oddsFormat=decimal&apiKey={ODDS_API_KEY}"
         )
         try:
-            response = requests.get(url, timeout=30, verify=False)
+            response = requests.get(url, timeout=30)  # 🔹 verify=True por defecto
             if response.status_code == 200:
                 data = response.json()
                 results.extend(data)
             else:
                 print(f"⚠️ Error HTTP {response.status_code} para {sport} ({market})")
+
         except Exception as e:
             print(f"⚠️ Error al obtener cuotas de {sport} ({market}): {e}")
+
     return results
 
 
 def find_surebets(events):
+    """
+    Detecta arbitrajes comparando las mejores cuotas de cada resultado.
+    """
     surebets = []
     for ev in events:
         try:
@@ -79,10 +88,14 @@ def find_surebets(events):
                         })
         except Exception as e:
             print(f"⚠️ Error procesando evento: {e}")
+
     return surebets
 
 
 def insert_surebets_postgres(surebets):
+    """
+    Inserta los arbitrajes detectados en PostgreSQL.
+    """
     conn = None
     cursor = None
     try:
@@ -97,6 +110,7 @@ def insert_surebets_postgres(surebets):
 
         for sb in surebets:
             try:
+                details_list = list(sb["details"].values())
                 cursor.execute("""
                     INSERT INTO surebets (
                         sport, team1, team2, market, profit_percent,
@@ -108,10 +122,10 @@ def insert_surebets_postgres(surebets):
                     sb["team2"],
                     sb["market"],
                     sb["profit_percent"],
-                    list(sb["details"].values())[0]["bookmaker"],
-                    list(sb["details"].values())[0]["price"],
-                    list(sb["details"].values())[1]["bookmaker"],
-                    list(sb["details"].values())[1]["price"],
+                    details_list[0]["bookmaker"],
+                    details_list[0]["price"],
+                    details_list[1]["bookmaker"],
+                    details_list[1]["price"],
                     sb["found_time"]
                 ))
             except Exception as e:
@@ -131,6 +145,9 @@ def insert_surebets_postgres(surebets):
 
 
 def main():
+    """
+    Proceso principal: consulta, detecta e inserta surebets.
+    """
     print(f"\n[{datetime.now()}] 🔍 Iniciando búsqueda de surebets...")
     all_surebets = []
 
@@ -149,9 +166,11 @@ def main():
     else:
         print("Sin resultados rentables este ciclo.")
 
-
+# ======================================
+# 🚀 CICLO AUTOMÁTICO
+# ======================================
 if __name__ == "__main__":
-    print("🚀 Iniciando bot de arbitrajes (Render)...")
+    print("🚀 Iniciando bot de arbitrajes (Render + PostgreSQL)...")
     while True:
         main()
         print(f"⏳ Esperando {INTERVAL_MINUTES} minutos antes del próximo ciclo...\n")
