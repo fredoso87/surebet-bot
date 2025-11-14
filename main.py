@@ -2,22 +2,24 @@ import requests
 import psycopg2
 import time
 from datetime import datetime, timezone
+import os
 
 # ======================================
 # 🔧 CONFIGURACIÓN
 # ======================================
-ODDS_API_KEY = "2a5684033edc1582d1e7befd417fda79"  # tu key de The Odds API
+
+ODDS_API_KEY = os.getenv("ODDS_API_KEY")  # tu clave se pone en Render como env var
 SPORTS = ["soccer", "basketball", "tennis"]
 REGION = "eu"
 PROFIT_THRESHOLD = 1.0
 INTERVAL_MINUTES = 10
 
 # PostgreSQL (Render)
-PG_USER = "surebet_db_user"
-PG_PASS = "bphDIBxCdPckefLT0SIOpB2WCEtiCCMU"
-PG_HOST = "dpg-d4b25nggjchc73f7d1o0-a"
-PG_PORT = "5432"
-PG_DB = "surebet_db"
+PG_USER = os.getenv("PG_USER")
+PG_PASS = os.getenv("PG_PASS")
+PG_HOST = os.getenv("PG_HOST")
+PG_PORT = os.getenv("PG_PORT", "5432")
+PG_DB = os.getenv("PG_DB")
 
 # ======================================
 # 🔍 FUNCIONES
@@ -34,23 +36,16 @@ def get_odds_from_oddsapi(sport, markets):
             f"?regions={REGION}&markets={market}&oddsFormat=decimal&apiKey={ODDS_API_KEY}"
         )
         try:
-            response = requests.get(url, timeout=30, verify=False)
+            response = requests.get(url, timeout=30)  # 🔹 verify=True por defecto
             if response.status_code == 200:
                 data = response.json()
                 results.extend(data)
             else:
                 print(f"⚠️ Error HTTP {response.status_code} para {sport} ({market})")
-        except requests.exceptions.SSLError:
-            print(f"⚠️ Advertencia SSL — usando conexión sin verificación para {url}")
-            try:
-                response = requests.get(url, timeout=30, verify=False)
-                if response.status_code == 200:
-                    data = response.json()
-                    results.extend(data)
-            except Exception as e:
-                print(f"⚠️ Error al procesar {sport} ({market}): {e}")
+
         except Exception as e:
             print(f"⚠️ Error al obtener cuotas de {sport} ({market}): {e}")
+
     return results
 
 
@@ -93,6 +88,7 @@ def find_surebets(events):
                         })
         except Exception as e:
             print(f"⚠️ Error procesando evento: {e}")
+
     return surebets
 
 
@@ -114,6 +110,7 @@ def insert_surebets_postgres(surebets):
 
         for sb in surebets:
             try:
+                details_list = list(sb["details"].values())
                 cursor.execute("""
                     INSERT INTO surebets (
                         sport, team1, team2, market, profit_percent,
@@ -125,10 +122,10 @@ def insert_surebets_postgres(surebets):
                     sb["team2"],
                     sb["market"],
                     sb["profit_percent"],
-                    list(sb["details"].values())[0]["bookmaker"],
-                    list(sb["details"].values())[0]["price"],
-                    list(sb["details"].values())[1]["bookmaker"],
-                    list(sb["details"].values())[1]["price"],
+                    details_list[0]["bookmaker"],
+                    details_list[0]["price"],
+                    details_list[1]["bookmaker"],
+                    details_list[1]["price"],
                     sb["found_time"]
                 ))
             except Exception as e:
@@ -136,8 +133,10 @@ def insert_surebets_postgres(surebets):
 
         conn.commit()
         print(f"✅ {len(surebets)} arbitrajes insertados correctamente en PostgreSQL.")
+
     except Exception as e:
         print(f"⚠️ Error PostgreSQL: {e}")
+
     finally:
         if cursor:
             cursor.close()
@@ -166,7 +165,6 @@ def main():
         insert_surebets_postgres(all_surebets)
     else:
         print("Sin resultados rentables este ciclo.")
-
 
 # ======================================
 # 🚀 CICLO AUTOMÁTICO
