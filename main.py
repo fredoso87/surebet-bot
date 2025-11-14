@@ -6,16 +6,15 @@ from flask import Flask
 import threading
 
 # ======================================
-# 🔧 CONFIGURACIÓN DIRECTA (SIN ENV VARS)
+# 🔧 CONFIGURACIÓN
 # ======================================
-
-ODDS_API_KEY = "2a5684033edc1582d1e7befd417fda79"  # TheOddsAPI
+ODDS_API_KEY = "2a5684033edc1582d1e7befd417fda79"
 SPORTS = ["soccer", "basketball", "tennis"]
 REGION = "eu"
 PROFIT_THRESHOLD = 1.0
 INTERVAL_MINUTES = 10
+BET_AMOUNT = 500  # soles, configurable
 
-# PostgreSQL (Render)
 PG_USER = "surebet_db_user"
 PG_PASS = "bphDIBxCdPckefLT0SIOpB2WCEtiCCMU"
 PG_HOST = "dpg-d4b25nggjchc73f7d1o0-a"
@@ -37,13 +36,14 @@ def get_odds_from_oddsapi(sport, markets):
             response = requests.get(url, timeout=30, verify=False)
             if response.status_code == 200:
                 data = response.json()
+                for ev in data:
+                    ev["market_type"] = market  # Guardamos el tipo de mercado
                 results.extend(data)
             else:
                 print(f"⚠️ Error HTTP {response.status_code} para {sport} ({market})")
         except Exception as e:
             print(f"⚠️ Error al obtener cuotas de {sport} ({market}): {e}")
     return results
-
 
 def find_surebets(events):
     surebets = []
@@ -52,9 +52,19 @@ def find_surebets(events):
             home = ev.get("home_team", "")
             away = ev.get("away_team", "")
             sport = ev.get("sport_key", "unknown")
-            bookmakers = ev.get("bookmakers", [])
+            market_type = ev.get("market_type", "")
+            commence_time_str = ev.get("commence_time", None)
 
+            # Determinar live/programado
+            if commence_time_str:
+                event_time = datetime.fromisoformat(commence_time_str.replace("Z", "+00:00"))
+                live_status = "live" if event_time <= datetime.now(timezone.utc) else "scheduled"
+            else:
+                live_status = "unknown"
+
+            bookmakers = ev.get("bookmakers", [])
             best_odds = {}
+
             for bm in bookmakers:
                 bm_name = bm.get("title", "")
                 markets = bm.get("markets", [])
@@ -69,20 +79,30 @@ def find_surebets(events):
                 inv_sum = sum(1 / v["price"] for v in best_odds.values())
                 if inv_sum < 1:
                     profit = (1 / inv_sum - 1) * 100
+
                     if profit >= PROFIT_THRESHOLD:
+                        # Calcular apuestas proporcionales
+                        outcomes = list(best_odds.keys())
+                        bet_team1 = round(BET_AMOUNT / best_odds[outcomes[0]]["price"] / inv_sum, 2)
+                        bet_team2 = round(BET_AMOUNT / best_odds[outcomes[1]]["price"] / inv_sum, 2)
+
                         surebets.append({
                             "sport": sport,
                             "team1": home,
                             "team2": away,
-                            "market": ev.get("sport_title", ""),
+                            "market": market_type,
                             "profit_percent": round(profit, 2),
                             "details": best_odds,
-                            "found_time": datetime.now(timezone.utc)
+                            "found_time": datetime.now(timezone.utc),
+                            "bet_team1": bet_team1,
+                            "bet_team2": bet_team2,
+                            "live_status": live_status
                         })
+
         except Exception as e:
             print(f"⚠️ Error procesando evento: {e}")
-    return surebets
 
+    return surebets
 
 def insert_surebets_postgres(surebets):
     conn = None
@@ -99,21 +119,26 @@ def insert_surebets_postgres(surebets):
 
         for sb in surebets:
             try:
+                outcomes = list(sb["details"].values())
                 cursor.execute("""
                     INSERT INTO surebets (
                         sport, team1, team2, market, profit_percent,
-                        bookmaker1, odd1, bookmaker2, odd2, found_time
-                    ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                        bookmaker1, odd1, bookmaker2, odd2,
+                        bet_team1, bet_team2, live_status, found_time
+                    ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
                 """, (
                     sb["sport"],
                     sb["team1"],
                     sb["team2"],
                     sb["market"],
                     sb["profit_percent"],
-                    list(sb["details"].values())[0]["bookmaker"],
-                    list(sb["details"].values())[0]["price"],
-                    list(sb["details"].values())[1]["bookmaker"],
-                    list(sb["details"].values())[1]["price"],
+                    outcomes[0]["bookmaker"],
+                    outcomes[0]["price"],
+                    outcomes[1]["bookmaker"],
+                    outcomes[1]["price"],
+                    sb["bet_team1"],
+                    sb["bet_team2"],
+                    sb["live_status"],
                     sb["found_time"]
                 ))
             except Exception as e:
@@ -130,7 +155,6 @@ def insert_surebets_postgres(surebets):
             cursor.close()
         if conn:
             conn.close()
-
 
 def main():
     print(f"\n[{datetime.now()}] 🔍 Iniciando búsqueda de surebets...")
@@ -151,7 +175,6 @@ def main():
     else:
         print("Sin resultados rentables este ciclo.")
 
-
 # ======================================
 # 🌐 FLASK SERVER (PARA RENDER WEB SERVICE)
 # ======================================
@@ -167,7 +190,6 @@ def start_bot():
         main()
         print(f"⏳ Esperando {INTERVAL_MINUTES} minutos antes del próximo ciclo...\n")
         time.sleep(INTERVAL_MINUTES * 60)
-
 
 if __name__ == "__main__":
     # Iniciar bot en segundo plano
