@@ -20,7 +20,7 @@ PG_PASS = "bphDIBxCdPckefLT0SIOpB2WCEtiCCMU"
 # ------------------------
 # Configuración API
 # ------------------------
-API_KEY = "tu_api_key"
+API_KEY = "2a5684033edc1582d1e7befd417fda79"
 API_URL = "https://api.the-odds-api.com/v4/sports/{sport}/odds/"
 
 # ------------------------
