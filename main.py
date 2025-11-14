@@ -78,42 +78,62 @@ def calcular_apuestas(outcomes, monto_total):
         return [0 for _ in outcomes]
 
 def insertar_surebet(evento):
-    """Inserta un evento de surebet en PostgreSQL"""
-    status = "live" if 'live' in evento else "scheduled"
-    outcomes = evento['bookmakers'][0]['markets'][0]['outcomes']
-    apuestas = calcular_apuestas(outcomes, APUESTA_SOLES)
-
-    sql = """
-    INSERT INTO surebets (
-        event_id, sport_key, sport_title, commence_time, home_team, away_team,
-        market_type, status, apuesta_total, resultado1, cuota1, apuesta1, resultado2, cuota2, apuesta2
-    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-    """
-    valores = (
-        evento['id'],
-        evento['sport_key'],
-        evento['sport_title'],
-        evento['commence_time'],
-        evento['home_team'],
-        evento['away_team'],
-        evento['market_type'],
-        status,
-        APUESTA_SOLES,
-        outcomes[0]['name'],
-        outcomes[0]['price'],
-        apuestas[0],
-        outcomes[1]['name'],
-        outcomes[1]['price'],
-        apuestas[1]
-    )
-
-    logging.info(f"Insertando evento: {valores}")
+    """Inserta un evento de surebet en PostgreSQL de forma segura."""
+    
+    # Determinar el estado
+    status = "live" if evento.get('live') else "scheduled"
+    
+    # Verificar que existan bookmakers y markets
     try:
+        if not evento.get('bookmakers') or not evento['bookmakers'][0].get('markets'):
+            logging.warning(f"Evento {evento.get('id')} sin mercados disponibles, se omite.")
+            return
+        
+        outcomes = evento['bookmakers'][0]['markets'][0].get('outcomes', [])
+        if len(outcomes) < 2:
+            logging.warning(f"Evento {evento.get('id')} con menos de 2 resultados, se omite.")
+            return
+        
+        # Obtener market_type
+        market_type = evento.get('market_type')
+        if not market_type:
+            market_type = evento['bookmakers'][0]['markets'][0].get('key', 'unknown')
+        
+        # Calcular apuestas
+        apuestas = calcular_apuestas(outcomes, APUESTA_SOLES)
+        
+        # Preparar SQL
+        sql = """
+        INSERT INTO surebets (
+            event_id, sport_key, sport_title, commence_time, home_team, away_team,
+            market_type, status, apuesta_total, resultado1, cuota1, apuesta1, resultado2, cuota2, apuesta2
+        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+        """
+        valores = (
+            evento.get('id'),
+            evento.get('sport_key'),
+            evento.get('sport_title'),
+            evento.get('commence_time'),
+            evento.get('home_team'),
+            evento.get('away_team'),
+            market_type,
+            status,
+            APUESTA_SOLES,
+            outcomes[0]['name'],
+            outcomes[0]['price'],
+            apuestas[0],
+            outcomes[1]['name'],
+            outcomes[1]['price'],
+            apuestas[1]
+        )
+
+        logging.info(f"Insertando evento {evento.get('id')}: {valores}")
         cursor.execute(sql, valores)
         conn.commit()
-        logging.info("Evento insertado correctamente.")
+        logging.info(f"Evento {evento.get('id')} insertado correctamente.")
+
     except Exception as e:
-        logging.error(f"Error al insertar registro: {e}")
+        logging.error(f"Error al insertar evento {evento.get('id')}: {e}")
 
 # ------------------------
 # Main
