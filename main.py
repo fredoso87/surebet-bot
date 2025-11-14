@@ -1,9 +1,7 @@
 import requests
 import psycopg2
-import time
 from datetime import datetime, timezone
 from flask import Flask
-import threading
 
 # ======================================
 # 🔧 CONFIGURACIÓN
@@ -12,8 +10,8 @@ ODDS_API_KEY = "2a5684033edc1582d1e7befd417fda79"
 SPORTS = ["soccer", "basketball", "tennis"]
 REGION = "eu"
 PROFIT_THRESHOLD = 1.0
-INTERVAL_MINUTES = 10
-BET_AMOUNT = 500  # soles, configurable
+BET_AMOUNT = 500  # soles
+# INTERVAL_MINUTES ya no se usa, el ciclo se ejecuta por request
 
 PG_USER = "surebet_db_user"
 PG_PASS = "bphDIBxCdPckefLT0SIOpB2WCEtiCCMU"
@@ -37,7 +35,7 @@ def get_odds_from_oddsapi(sport, markets):
             if response.status_code == 200:
                 data = response.json()
                 for ev in data:
-                    ev["market_type"] = market  # Guardamos el tipo de mercado
+                    ev["market_type"] = market
                 results.extend(data)
             else:
                 print(f"⚠️ Error HTTP {response.status_code} para {sport} ({market})")
@@ -176,24 +174,16 @@ def main():
         print("Sin resultados rentables este ciclo.")
 
 # ======================================
-# 🌐 FLASK SERVER (PARA RENDER WEB SERVICE)
+# 🌐 FLASK SERVER (PARA RENDER WEB SERVICE GRATIS)
 # ======================================
 
 app = Flask(__name__)
 
 @app.get("/")
 def home():
+    main()  # ejecuta el ciclo al abrir la URL
+    print("acabo ciclo.")
     return "Surebet bot running on Render"
 
-def start_bot():
-    while True:
-        main()
-        print(f"⏳ Esperando {INTERVAL_MINUTES} minutos antes del próximo ciclo...\n")
-        time.sleep(INTERVAL_MINUTES * 60)
-
 if __name__ == "__main__":
-    # Iniciar bot en segundo plano
-    threading.Thread(target=start_bot, daemon=True).start()
-
-    # Servidor web que Render necesita
     app.run(host="0.0.0.0", port=10000)
