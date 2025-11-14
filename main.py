@@ -2,6 +2,7 @@ import requests
 import psycopg2
 from datetime import datetime, timezone
 from flask import Flask
+import logging
 
 # ======================================
 # 🔧 CONFIGURACIÓN
@@ -11,13 +12,20 @@ SPORTS = ["soccer", "basketball", "tennis"]
 REGION = "eu"
 PROFIT_THRESHOLD = 1.0
 BET_AMOUNT = 500  # soles
-# INTERVAL_MINUTES ya no se usa, el ciclo se ejecuta por request
 
 PG_USER = "surebet_db_user"
 PG_PASS = "bphDIBxCdPckefLT0SIOpB2WCEtiCCMU"
-PG_HOST = "dpg-d4b25nggjchc73f7d1o0-a"
+PG_HOST = "dpg-d4b25nggjchc73f7d1o0-a.render.com"
 PG_PORT = "5432"
 PG_DB = "surebet_db"
+
+# ======================================
+# 🔍 LOGGING
+# ======================================
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s"
+)
 
 # ======================================
 # 🔍 FUNCIONES
@@ -34,13 +42,14 @@ def get_odds_from_oddsapi(sport, markets):
             response = requests.get(url, timeout=30, verify=False)
             if response.status_code == 200:
                 data = response.json()
+                logging.info(f"{len(data)} eventos obtenidos de {sport} ({market})")
                 for ev in data:
                     ev["market_type"] = market
                 results.extend(data)
             else:
-                print(f"⚠️ Error HTTP {response.status_code} para {sport} ({market})")
+                logging.warning(f"HTTP {response.status_code} para {sport} ({market})")
         except Exception as e:
-            print(f"⚠️ Error al obtener cuotas de {sport} ({market}): {e}")
+            logging.error(f"Error al obtener cuotas de {sport} ({market}): {e}")
     return results
 
 def find_surebets(events):
@@ -53,7 +62,7 @@ def find_surebets(events):
             market_type = ev.get("market_type", "")
             commence_time_str = ev.get("commence_time", None)
 
-            # Determinar live/programado
+            # Determinar live/scheduled
             if commence_time_str:
                 event_time = datetime.fromisoformat(commence_time_str.replace("Z", "+00:00"))
                 live_status = "live" if event_time <= datetime.now(timezone.utc) else "scheduled"
@@ -77,9 +86,7 @@ def find_surebets(events):
                 inv_sum = sum(1 / v["price"] for v in best_odds.values())
                 if inv_sum < 1:
                     profit = (1 / inv_sum - 1) * 100
-
                     if profit >= PROFIT_THRESHOLD:
-                        # Calcular apuestas proporcionales
                         outcomes = list(best_odds.keys())
                         bet_team1 = round(BET_AMOUNT / best_odds[outcomes[0]]["price"] / inv_sum, 2)
                         bet_team2 = round(BET_AMOUNT / best_odds[outcomes[1]]["price"] / inv_sum, 2)
@@ -96,10 +103,9 @@ def find_surebets(events):
                             "bet_team2": bet_team2,
                             "live_status": live_status
                         })
-
+                        logging.info(f"✅ Surebet detectado: {home} vs {away} | {market_type} | Profit: {round(profit,2)}%")
         except Exception as e:
-            print(f"⚠️ Error procesando evento: {e}")
-
+            logging.error(f"Error procesando evento: {e}")
     return surebets
 
 def insert_surebets_postgres(surebets):
@@ -114,7 +120,6 @@ def insert_surebets_postgres(surebets):
             port=PG_PORT
         )
         cursor = conn.cursor()
-
         for sb in surebets:
             try:
                 outcomes = list(sb["details"].values())
@@ -140,14 +145,11 @@ def insert_surebets_postgres(surebets):
                     sb["found_time"]
                 ))
             except Exception as e:
-                print(f"⚠️ Error al insertar registro: {e}")
-
+                logging.error(f"Error al insertar registro: {e}")
         conn.commit()
-        print(f"✅ {len(surebets)} arbitrajes insertados correctamente en PostgreSQL.")
-
+        logging.info(f"✅ {len(surebets)} arbitrajes insertados correctamente en PostgreSQL.")
     except Exception as e:
-        print(f"⚠️ Error PostgreSQL: {e}")
-
+        logging.error(f"Error PostgreSQL: {e}")
     finally:
         if cursor:
             cursor.close()
@@ -155,34 +157,31 @@ def insert_surebets_postgres(surebets):
             conn.close()
 
 def main():
-    print(f"\n[{datetime.now()}] 🔍 Iniciando búsqueda de surebets...")
+    logging.info("🔍 Iniciando búsqueda de surebets...")
     all_surebets = []
-
     for sport in SPORTS:
-        print(f"[{datetime.now()}] Analizando {sport.upper()}...")
+        logging.info(f"Analizando {sport.upper()}...")
         events = get_odds_from_oddsapi(sport, ["h2h", "totals"])
         surebets = find_surebets(events)
         if surebets:
-            print(f"💰 {len(surebets)} surebets encontradas en {sport}.")
+            logging.info(f"{len(surebets)} surebets encontradas en {sport}.")
             all_surebets.extend(surebets)
         else:
-            print(f"— No se encontraron surebets en {sport}.")
-
+            logging.info(f"No se encontraron surebets en {sport}.")
     if all_surebets:
         insert_surebets_postgres(all_surebets)
     else:
-        print("Sin resultados rentables este ciclo.")
+        logging.info("Sin resultados rentables este ciclo.")
 
 # ======================================
-# 🌐 FLASK SERVER (PARA RENDER WEB SERVICE GRATIS)
+# 🌐 FLASK SERVER (WEB SERVICE GRATIS)
 # ======================================
 
 app = Flask(__name__)
 
 @app.get("/")
 def home():
-    main()  # ejecuta el ciclo al abrir la URL
-    print("acabo ciclo.")
+    main()  # ejecuta el ciclo cada vez que alguien visita la URL
     return "Surebet bot running on Render"
 
 if __name__ == "__main__":
