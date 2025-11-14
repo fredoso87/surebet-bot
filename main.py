@@ -51,24 +51,35 @@ def get_odds_from_oddsapi(sport, markets):
         except Exception as e:
             logging.error(f"Error al obtener cuotas de {sport} ({market}): {e}")
     return results
-
 def find_surebets(events):
     surebets = []
     for ev in events:
         try:
+            # 🔹 Log inicial del evento
+            print("📌 Evento recibido:", ev)
+
             home = ev.get("home_team", "")
             away = ev.get("away_team", "")
             sport = ev.get("sport_key", "unknown")
             market_type = ev.get("market_type", "")
-            commence_time_str = ev.get("commence_time", None)
 
-            # Determinar live/scheduled
-            if commence_time_str:
-                event_time = datetime.fromisoformat(commence_time_str.replace("Z", "+00:00"))
-                live_status = "live" if event_time <= datetime.now(timezone.utc) else "scheduled"
+            # 🔹 Determinar live/scheduled
+            live_status = "unknown"
+
+            # Si la API devuelve un campo 'live'
+            if ev.get("live", False):
+                live_status = "live"
             else:
-                live_status = "unknown"
+                # Revisar commence_time si existe
+                commence_time_str = ev.get("commence_time", None)
+                if commence_time_str:
+                    event_time = datetime.fromisoformat(commence_time_str.replace("Z", "+00:00"))
+                    if event_time <= datetime.now(timezone.utc):
+                        live_status = "live"
+                    else:
+                        live_status = "scheduled"
 
+            # 🔹 Procesar bookmakers y mejores cuotas
             bookmakers = ev.get("bookmakers", [])
             best_odds = {}
 
@@ -82,6 +93,7 @@ def find_surebets(events):
                         if name not in best_odds or price > best_odds[name]["price"]:
                             best_odds[name] = {"price": price, "bookmaker": bm_name}
 
+            # 🔹 Calcular surebet
             if len(best_odds) >= 2:
                 inv_sum = sum(1 / v["price"] for v in best_odds.values())
                 if inv_sum < 1:
@@ -103,9 +115,12 @@ def find_surebets(events):
                             "bet_team2": bet_team2,
                             "live_status": live_status
                         })
-                        logging.info(f"✅ Surebet detectado: {home} vs {away} | {market_type} | Profit: {round(profit,2)}%")
+
+                        print(f"✅ Surebet detectado: {home} vs {away} | {market_type} | Profit: {round(profit,2)}% | Status: {live_status}")
+
         except Exception as e:
-            logging.error(f"Error procesando evento: {e}")
+            print(f"⚠️ Error procesando evento: {e}")
+
     return surebets
 
 def insert_surebets_postgres(surebets):
