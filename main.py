@@ -26,11 +26,12 @@ API_URL = "https://api.the-odds-api.com/v4/sports/{sport}/odds/"
 # ------------------------
 # Monto a apostar
 # ------------------------
-APUESTA_SOLES = 500
+TOTAL_INVERSIÓN = 500  # S/. 500 por cada surebet
 
-# ------------------------
+
+# ========================
 # Conexión a PostgreSQL
-# ------------------------
+# ========================
 try:
     conn = psycopg2.connect(
         host=PG_HOST,
@@ -45,18 +46,21 @@ except Exception as e:
     logging.error(f"Error conectando a PostgreSQL: {e}")
     raise
 
-# ------------------------
-# Funciones
-# ------------------------
+
+# ========================
+# FUNCIONES PRINCIPALES
+# ========================
+
 def obtener_eventos(sport_key):
-    """Obtiene eventos de la API de odds"""
+    """Obtiene eventos de la API."""
     url = API_URL.format(sport=sport_key)
     params = {
         "apiKey": API_KEY,
         "regions": "us",
-        "markets": "totals,h2h",
+        "markets": "h2h,totals",
         "oddsFormat": "decimal"
     }
+
     try:
         r = requests.get(url, params=params, verify=False)
         r.raise_for_status()
@@ -67,88 +71,118 @@ def obtener_eventos(sport_key):
         logging.error(f"Error obteniendo eventos de {sport_key}: {e}")
         return []
 
-def calcular_apuestas(outcomes, monto_total):
-    """Calcula cuánto apostar a cada resultado según la cuota"""
+
+def calcular_surebet(outcomes, total_inversion):
+    """
+    Calcula stakes para una surebet.
+    Funciona con 2 o 3 outcomes.
+    Retorna (stakes, profit)
+    """
+
     try:
-        total_inverse = sum([1/o['price'] for o in outcomes])
-        apuestas = [round((monto_total / o['price']) / total_inverse, 2) for o in outcomes]
-        return apuestas
+        inv_sum = sum([1 / o["price"] for o in outcomes])
+        stakes = [(total_inversion / o["price"]) / inv_sum for o in outcomes]
+
+        payouts = [stakes[i] * outcomes[i]["price"] for i in range(len(outcomes))]
+        profit = round(min(payouts) - total_inversion, 2)
+
+        stakes = [round(s, 2) for s in stakes]
+
+        return stakes, profit
+
     except Exception as e:
-        logging.error(f"Error calculando apuestas: {e}")
-        return [0 for _ in outcomes]
+        logging.error(f"Error calculando surebet: {e}")
+        return None, None
 
-def insertar_surebet(evento):
-    """Inserta un evento de surebet en PostgreSQL de forma segura."""
-    
-    # Determinar el estado
-    status = "live" if evento.get('live') else "scheduled"
-    
-    # Verificar que existan bookmakers y markets
+
+def insertar_surebet(evento, market, outcomes, stakes, profit):
+    """Inserta surebet en la BD."""
+
+    sql = """
+    INSERT INTO surebets (
+        event_id, sport_key, sport_title, commence_time,
+        home_team, away_team, market_type,
+        outcome1_name, outcome1_odds, stake1,
+        outcome2_name, outcome2_odds, stake2,
+        outcome3_name, outcome3_odds, stake3,
+        total_stake, profit, status
+    ) VALUES (%s,%s,%s,%s,%s,%s,%s,
+              %s,%s,%s,
+              %s,%s,%s,
+              %s,%s,%s,
+              %s,%s,%s)
+    """
+
+    valores = (
+        evento["id"], evento["sport_key"], evento["sport_title"], evento["commence_time"],
+        evento.get("home_team", ""), evento.get("away_team", ""), market["key"],
+
+        outcomes[0]["name"], outcomes[0]["price"], stakes[0],
+        outcomes[1]["name"], outcomes[1]["price"], stakes[1],
+
+        outcomes[2]["name"] if len(outcomes) == 3 else None,
+        outcomes[2]["price"] if len(outcomes) == 3 else None,
+        stakes[2] if len(outcomes) == 3 else None,
+
+        TOTAL_INVERSIÓN, profit, "scheduled"
+    )
+
     try:
-        if not evento.get('bookmakers') or not evento['bookmakers'][0].get('markets'):
-            logging.warning(f"Evento {evento.get('id')} sin mercados disponibles, se omite.")
-            return
-        
-        outcomes = evento['bookmakers'][0]['markets'][0].get('outcomes', [])
-        if len(outcomes) < 2:
-            logging.warning(f"Evento {evento.get('id')} con menos de 2 resultados, se omite.")
-            return
-        
-        # Obtener market_type
-        market_type = evento.get('market_type')
-        if not market_type:
-            market_type = evento['bookmakers'][0]['markets'][0].get('key', 'unknown')
-        
-        # Calcular apuestas
-        apuestas = calcular_apuestas(outcomes, APUESTA_SOLES)
-        
-        # Preparar SQL
-        sql = """
-        INSERT INTO surebets (
-            event_id, sport_key, sport_title, commence_time, home_team, away_team,
-            market_type, status, apuesta_total, resultado1, cuota1, apuesta1, resultado2, cuota2, apuesta2
-        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-        """
-        valores = (
-            evento.get('id'),
-            evento.get('sport_key'),
-            evento.get('sport_title'),
-            evento.get('commence_time'),
-            evento.get('home_team'),
-            evento.get('away_team'),
-            market_type,
-            status,
-            APUESTA_SOLES,
-            outcomes[0]['name'],
-            outcomes[0]['price'],
-            apuestas[0],
-            outcomes[1]['name'],
-            outcomes[1]['price'],
-            apuestas[1]
-        )
-
-        logging.info(f"Insertando evento {evento.get('id')}: {valores}")
         cursor.execute(sql, valores)
         conn.commit()
-        logging.info(f"Evento {evento.get('id')} insertado correctamente.")
-
+        logging.info(f"Surebet insertada correctamente. Profit: S/ {profit}")
     except Exception as e:
-        logging.error(f"Error al insertar evento {evento.get('id')}: {e}")
+        logging.error(f"Error insertando en BD: {e}")
 
-# ------------------------
-# Main
-# ------------------------
+
+def procesar_evento(evento):
+    """Analiza mercados y detecta surebets."""
+
+    if "bookmakers" not in evento:
+        return
+
+    for bookmaker in evento["bookmakers"]:
+        for market in bookmaker["markets"]:
+
+            outcomes = market["outcomes"]
+
+            # Filtrar solo mercados válidos para surebets:
+            if len(outcomes) not in (2, 3):
+                continue
+
+            stakes, profit = calcular_surebet(outcomes, TOTAL_INVERSIÓN)
+
+            if stakes is None:
+                continue
+
+            # Solo insertar si realmente hay ganancia (>0)
+            if profit > 0:
+                insertar_surebet(evento, market, outcomes, stakes, profit)
+
+
+# ========================
+# MAIN
+# ========================
 if __name__ == "__main__":
-    deportes = ["basketball_ncaab", "basketball_euroleague", "tennis"]
+
+    deportes = [
+        "basketball_ncaab",
+        "basketball_euroleague",
+        "tennis",
+        "soccer_epl",     # Premier League
+        "soccer_spain_la_liga",
+        "soccer_italy_serie_a",
+        "soccer_germany_bundesliga",
+        "soccer_france_ligue_one",
+        "soccer_brazil_campeonato",
+        "soccer_uefa_champions_league"
+    ]
+
     for sport in deportes:
-        logging.info(f"Analizando {sport.upper()}...")
         eventos = obtener_eventos(sport)
-        if not eventos:
-            logging.info(f"No se encontraron eventos para {sport}.")
-            continue
+
         for evento in eventos:
-            # Aquí podrías agregar lógica de filtrado por surebet, profit mínimo, etc.
-            insertar_surebet(evento)
+            procesar_evento(evento)
 
     cursor.close()
     conn.close()
