@@ -166,17 +166,20 @@ def procesar_evento(evento):
 if __name__ == "__main__":
 
     deportes = [
-        "basketball_ncaab",
-        "basketball_euroleague",
-        "tennis",
-        "soccer_epl",     # Premier League
-        "soccer_spain_la_liga",
-        "soccer_italy_serie_a",
-        "soccer_germany_bundesliga",
-        "soccer_france_ligue_one",
-        "soccer_brazil_campeonato",
-        "soccer_uefa_champions_league"
-    ]
+    "basketball_ncaab",
+    "basketball_euroleague",
+    "tennis",
+    "soccer_epl",
+    "soccer_spain_la_liga",
+    "soccer_italy_serie_a",
+    "soccer_germany_bundesliga",
+    "soccer_france_ligue_one",
+    "soccer_brazil_campeonato",
+    "soccer_conmebol_libertadores",
+    "soccer_conmebol_sudamericana",
+    "soccer_usa_mls"
+]
+
 
     for sport in deportes:
         eventos = obtener_eventos(sport)
