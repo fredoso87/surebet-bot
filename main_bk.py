@@ -9,27 +9,27 @@ import psycopg2
 import psycopg2.extras
 
 # ---------------------------------
-# CONFIG
+# CONFIG (valores directos, sin os.getenv)
 # ---------------------------------
-SPORTRADAR_API_KEY = "xnCeW896IpZvYU3i8bSziTU9i4AthfjDn3Oa18Ie"
+SPORTRADAR_API_KEY = "TU_API_KEY_SPORTRADAR"
 SPORTRADAR_BASE_URL = "https://api.sportradar.com/soccer/trial/v4/en"
 
-TG_TOKEN = "TU_TG_TOKEN"
-TG_CHAT  = "TU_TG_CHAT_ID"
+TG_TOKEN = "8252990863:AAEAN1qEh8xCwKT6-61rA1lp8nSHrHSFQLc"
+TG_CHAT  = "1206397833"
 
-PG_HOST = "TU_PG_HOST"
+PG_HOST = "dpg-d4b25nggjchc73f7d1o0-a"
 PG_PORT = 5432
 PG_DB   = "surebet_db"
 PG_USER = "surebet_db_user"
-PG_PASS = "TU_PG_PASS"
+PG_PASS = "bphDIBxCdPckefLT0SIOpB2WCEtiCCMU"
 
 BASE_STAKE = 500.0
 CURRENCY   = "PEN"
 INSERT_HOUR = 10
-MIN_PROFIT_PERCENT_BIG = 0.02
-MIN_PROFIT_PERCENT_SMALL = 0.03
-MAX_STAKE = 1000.0
-POLL_SECONDS = 300
+MIN_PROFIT_PERCENT_BIG = 0.02   # 2% mínimo para casas grandes
+MIN_PROFIT_PERCENT_SMALL = 0.03 # 3% mínimo para casas menores
+MAX_STAKE = 1000.0              # stake máximo permitido
+POLL_SECONDS = 300              # consulta live cada 5 minutos
 
 BIG_BOOKMAKERS = {"Bet365", "William Hill", "Pinnacle", "Unibet", "Betfair"}
 
@@ -106,26 +106,31 @@ def compute_surebet_stakes(over_odds: float, under_odds: float, stake: float):
     return implied_sum, s_over, s_under, profit_abs, profit_pct
 
 def compute_hedge_amount(stake_over: float, over_odds: float, under_odds: float):
-    return (stake_over * over_odds) / under_odds if under_odds and under_odds > 0 else 0.0
+    # Cobertura simple para igualar retorno en ambos lados
+    return (stake_over * over_odds) / under_odds if under_odds > 0 else 0.0
 
 def log_alert(match_id, alert_type, message, profit_pct=None, profit_amount=None):
     q = """
-    INSERT INTO alerts (match_id, alert_type, message, profit_percent, profit_amount, created_at)
-    VALUES (%s, %s, %s, %s, %s, NOW())
+    INSERT INTO alerts (match_id, alert_type, message, profit_percent, profit_amount)
+    VALUES (%s, %s, %s, %s, %s)
     """
     db_exec(q, (match_id, alert_type, message, profit_pct, profit_amount), fetch=False)
 
+# ---------------------------------
+# CONFIRMACIÓN MANUAL DE APUESTA (opcional, para semi-automático)
+# ---------------------------------
 def confirm_bet(event_id: str):
     q = "UPDATE matches SET bet_placed=TRUE, updated_at=NOW() WHERE event_id=%s"
     db_exec(q, (event_id,), fetch=False)
     logging.info(f"Apuesta confirmada manualmente para evento {event_id}")
 
 # ---------------------------------
-# SPORTRADAR API (dos pasos: fixtures + odds)
+# SPORTRADAR API
+# Nota: La estructura real puede variar según tu plan/endpoints; ajusta nombres si tu respuesta difiere.
 # ---------------------------------
 def fetch_prematch_over25():
-    # Paso 1: lista de partidos programados para HOY
-    url = f"{SPORTRADAR_BASE_URL}/schedules/{datetime.utcnow().date()}/schedule.json?api_key={SPORTRADAR_API_KEY}"
+    # Agenda con cuotas pre-match; ajustar endpoint según contrato/plan
+    url = f"{SPORTRADAR_BASE_URL}/odds/schedules.json?api_key={SPORTRADAR_API_KEY}"
     data = safe_request(url)
 
     results = []
@@ -138,13 +143,9 @@ def fetch_prematch_over25():
         away = competitors[1].get("name")
         commence_time = ev.get("scheduled")
 
-        # Paso 2: pedir odds del evento
-        odds_url = f"{SPORTRADAR_BASE_URL}/odds/{event_id}/odds.json?api_key={SPORTRADAR_API_KEY}"
-        odds_data = safe_request(odds_url)
-
-        for market in odds_data.get("markets", []):
-            mname = (market.get("name") or "").lower()
-            if mname in {"total", "totals", "over/under"}:
+        # En varios feeds, los mercados/odds se proveen por separado; si vienen embebidos:
+        for market in ev.get("markets", []):
+            if (market.get("name") or "").lower() in {"total", "totals", "over/under"}:
                 for outcome in market.get("outcomes", []):
                     name = (outcome.get("name") or "").lower()
                     total = outcome.get("total")
@@ -155,7 +156,7 @@ def fetch_prematch_over25():
                             "home_team": home,
                             "away_team": away,
                             "commence_time": commence_time,
-                            "bookmaker": outcome.get("bookmaker") or "Sportradar",
+                            "bookmaker": "Sportradar",
                             "odds": float(odds)
                         })
     return results
@@ -164,12 +165,13 @@ def insert_matches(rows):
     ids = []
     for row in rows:
         q = """
-        INSERT INTO matches (event_id, home_team, away_team, commence_time, bookmaker, market, selection, odds, created_at, updated_at, bet_placed)
-        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,NOW(),NOW(),FALSE)
+        INSERT INTO matches (event_id, home_team, away_team, commence_time, bookmaker, market, selection, odds)
+        VALUES (%s,%s,%s,%s,%s,%s,%s,%s)
         ON CONFLICT (event_id, bookmaker, market, selection)
         DO UPDATE SET odds = EXCLUDED.odds, updated_at = NOW()
         RETURNING id
         """
+        # Parseo robusto de fecha
         raw_dt = row.get("commence_time")
         try:
             if isinstance(raw_dt, str):
@@ -195,40 +197,10 @@ def insert_matches(rows):
     return ids
 
 def fetch_live_events():
-    # Paso 1: feed de eventos en vivo
-    url = f"{SPORTRADAR_BASE_URL}/schedules/live/schedule.json?api_key={SPORTRADAR_API_KEY}"
+    # Live odds feed; ajustar endpoint según plan. Este ejemplo usa live.json simple
+    url = f"{SPORTRADAR_BASE_URL}/odds/live.json?api_key={SPORTRADAR_API_KEY}"
     data = safe_request(url)
-
-    events = []
-    for ev in data.get("sport_events", []):
-        event_id = ev.get("id")
-        competitors = ev.get("competitors", [])
-        if len(competitors) < 2:
-            continue
-        home = competitors[0].get("name")
-        away = competitors[1].get("name")
-        status = ev.get("sport_event_status", {}) or {}
-        minute = int(status.get("match_time", 0) or status.get("clock", {}).get("match_time", 0) or 0)
-        score_home = int(status.get("home_score", 0) or 0)
-        score_away = int(status.get("away_score", 0) or 0)
-
-        # Paso 2: odds live del evento
-        odds_url = f"{SPORTRADAR_BASE_URL}/odds/{event_id}/live_odds.json?api_key={SPORTRADAR_API_KEY}"
-        odds_data = safe_request(odds_url)
-
-        # Normalizamos estructura para el monitor
-        ev_norm = {
-            "id": event_id,
-            "home": home,
-            "away": away,
-            "minute": minute,
-            "score_home": score_home,
-            "score_away": score_away,
-            "markets": odds_data.get("markets", [])
-        }
-        events.append(ev_norm)
-
-    return events
+    return data.get("sport_events", [])
 
 # ---------------------------------
 # MONITOREO
@@ -247,16 +219,22 @@ def heartbeat():
 def monitor_live_and_notify():
     events = fetch_live_events()
     for ev in events:
-        fixture_id = ev["id"]
-        home = ev["home"]
-        away = ev["away"]
-        minute = ev["minute"]
-        score_home = ev["score_home"]
-        score_away = ev["score_away"]
+        fixture_id = ev.get("id")  # Sportradar event id (uuid)
+        competitors = ev.get("competitors", [])
+        if len(competitors) < 2:
+            continue
+        home = competitors[0].get("name")
+        away = competitors[1].get("name")
+
+        # Estado del partido (revisar tu feed para nombres exactos)
+        minute = int(ev.get("clock", {}).get("match_time", 0) or 0)
+        status = ev.get("sport_event_status", {}) or {}
+        score_home = int(status.get("home_score", 0) or 0)
+        score_away = int(status.get("away_score", 0) or 0)
         total_goals = score_home + score_away
 
         # Recuperar Over 2.5 pre-match ya apostado
-        q = "SELECT id, odds FROM matches WHERE event_id=%s AND bet_placed=TRUE AND selection='over_2.5' LIMIT 1"
+        q = "SELECT id, odds FROM matches WHERE event_id=%s AND bet_placed=TRUE LIMIT 1"
         res = db_exec(q, (fixture_id,), fetch=True)
         if not res:
             continue
@@ -273,8 +251,7 @@ def monitor_live_and_notify():
         # Buscar Under 2.5 live en mercados
         under_live, bookmaker = None, None
         for market in ev.get("markets", []):
-            mname = (market.get("name") or "").lower()
-            if mname in {"total", "totals", "over/under"}:
+            if (market.get("name") or "").lower() in {"total", "totals", "over/under"}:
                 for outcome in market.get("outcomes", []):
                     name = (outcome.get("name") or "").lower()
                     total = outcome.get("total")
@@ -292,7 +269,7 @@ def monitor_live_and_notify():
             if implied_sum < 1.0:
                 min_profit = min_profit_by_bookmaker(bookmaker or "")
                 if profit_pct_base >= min_profit:
-                    # Stake dinámico conservador
+                    # Stake dinámico conservador: raíz cuadrada del ratio
                     scale = max(1.0, (profit_pct_base / min_profit) ** 0.5)
                     dynamic_stake = min(MAX_STAKE, BASE_STAKE * scale)
 
@@ -330,6 +307,7 @@ def main():
     while True:
         now = datetime.now()
         try:
+            # Inserción/actualización diaria a la hora definida
             if (last_insert_date is None or last_insert_date != now.date()) and now.hour == INSERT_HOUR:
                 rows = fetch_prematch_over25()
                 ids = insert_matches(rows)
