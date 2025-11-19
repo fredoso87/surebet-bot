@@ -182,15 +182,46 @@ def heartbeat():
 def main():
     logging.info("Script iniciado correctamente (solo pre-match).")
     last_insert_date = None
+    inserted_today = False  # bandera para controlar la inserción diaria
+
+    # Inserción inmediata al arrancar
+    try:
+        rows = fetch_prematch_over25()
+        ids = insert_matches(rows)
+        logging.info(f"[ARRANQUE] Insertados/actualizados {len(ids)} partidos pre-match (Over 2.5).")
+        for row in rows:
+            logging.info(
+                f"Partido: {row['home_team']} vs {row['away_team']} | "
+                f"Bookmaker: {row['bookmaker']} | Odds: {row['odds']} | EventID: {row['event_id']}"
+            )
+        send_telegram(f"[ARRANQUE] Insertados/actualizados {len(ids)} partidos pre-match en DB.")
+        last_insert_date = datetime.now().date()
+        inserted_today = True
+    except Exception as e:
+        logging.error(f"Error en inserción inicial: {e}")
+
+    # Ciclo infinito
     while True:
         now = datetime.now()
         try:
-            if (last_insert_date is None or last_insert_date != now.date()) and now.hour == INSERT_HOUR:
+            # Inserción diaria a la hora fija
+            if (last_insert_date != now.date()) and now.hour == INSERT_HOUR and not inserted_today:
                 rows = fetch_prematch_over25()
                 ids = insert_matches(rows)
-                logging.info(f"Insertados/actualizados {len(ids)} partidos pre-match (Over 2.5).")
-                send_telegram(f"Insertados/actualizados {len(ids)} partidos pre-match en DB.")
+                logging.info(f"[DIARIO] Insertados/actualizados {len(ids)} partidos pre-match (Over 2.5).")
+                for row in rows:
+                    logging.info(
+                        f"Partido: {row['home_team']} vs {row['away_team']} | "
+                        f"Bookmaker: {row['bookmaker']} | Odds: {row['odds']} | EventID: {row['event_id']}"
+                    )
+                send_telegram(f"[DIARIO] Insertados/actualizados {len(ids)} partidos pre-match en DB.")
                 last_insert_date = now.date()
+                inserted_today = True
+
+            # Reset bandera al cambiar de día
+            if last_insert_date != now.date():
+                inserted_today = False
+
         except Exception as e:
             logging.error(f"Error en inserción diaria: {e}")
 
@@ -200,6 +231,7 @@ def main():
             logging.error(f"Error en heartbeat: {e}")
 
         time.sleep(POLL_SECONDS)
+
 
 # ---------------------------------
 # FLASK (para Render Web Service)
