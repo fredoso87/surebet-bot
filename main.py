@@ -14,7 +14,6 @@ import psycopg2.extras
 SPORTRADAR_API_KEY = "xnCeW896IpZvYU3i8bSziTU9i4AthfjDn3Oa18Ie"
 TG_TOKEN = "8252990863:AAEAN1qEh8xCwKT6-61rA1lp8nSHrHSFQLc"
 TG_CHAT  = "1206397833"
-
 PG_HOST = "dpg-d4b25nggjchc73f7d1o0-a"
 PG_PORT = 5432
 PG_DB   = "surebet_db"
