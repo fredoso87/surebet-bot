@@ -22,7 +22,7 @@ PG_DB   = "surebet_db"
 PG_USER = "surebet_db_user"
 PG_PASS = "bphDIBxCdPckefLT0SIOpB2WCEtiCCMU"
 
-INSERT_HOUR = 10
+INSERT_HOUR = 15
 POLL_SECONDS = 300
 
 logging.basicConfig(
