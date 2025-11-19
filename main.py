@@ -9,16 +9,17 @@ import psycopg2
 import psycopg2.extras
 
 # ---------------------------------
-# CONFIG (usando tus credenciales)
+# CONFIG (tus credenciales)
 # ---------------------------------
 SPORTRADAR_API_KEY = "xnCeW896IpZvYU3i8bSziTU9i4AthfjDn3Oa18Ie"
 TG_TOKEN = "8252990863:AAEAN1qEh8xCwKT6-61rA1lp8nSHrHSFQLc"
 TG_CHAT  = "1206397833"
+
 PG_HOST = "dpg-d4b25nggjchc73f7d1o0-a"
 PG_PORT = 5432
 PG_DB   = "surebet_db"
 PG_USER = "surebet_db_user"
-PG_PASS = "bphDIBxCdPckefLT0SIOpB2WCEtiCCMU"  # reemplaza por tu contraseña real
+PG_PASS = "bphDIBxCdPckefLT0SIOpB2WCEtiCCMU"  # contraseña actualizada
 
 BASE_STAKE = 500.0
 CURRENCY   = "PEN"
@@ -225,7 +226,6 @@ def fetch_live_under25():
                 score_home = int(status.get("home_score", 0) or 0)
                 score_away = int(status.get("away_score", 0) or 0)
 
-                # Mejor Under 2.5 live entre todos los bookmakers
                 best_odds = None
                 best_bookmaker = None
                 for market in ev.get("markets", []):
@@ -288,18 +288,15 @@ def monitor_live_and_notify():
         match_id_db = res[0]["id"]
         over_odds_prematch = float(res[0]["odds"])
 
-        # CASHOUT temprano si hay gol <= 20'
         if minute <= 20 and total_goals >= 1:
             msg = f"Gol temprano en {home} vs {away} (min {minute}, {score_home}-{score_away}). CASHOUT sugerido."
             send_telegram(msg)
             log_alert(match_id_db, "cashout", msg, None, None)
             continue
 
-        # Mejor Under 2.5 live del feed
         under_live = float(ev["odds"])
         bookmaker_live = ev["bookmaker"]
 
-        # Estrategia: a partir de 20' y 0-0 → evaluar surebet o cobertura
         if minute >= 20 and total_goals == 0 and valid_odds(over_odds_prematch) and valid_odds(under_live):
             implied_sum, s_over_base, s_under_base, profit_abs_base, profit_pct_base = compute_surebet_stakes(
                 over_odds_prematch, under_live, BASE_STAKE
@@ -308,7 +305,6 @@ def monitor_live_and_notify():
             if implied_sum < 1.0:
                 min_profit = min_profit_by_bookmaker(bookmaker_live or "")
                 if profit_pct_base >= min_profit:
-                    # Stake dinámico conservador
                     scale = max(1.0, (profit_pct_base / min_profit) ** 0.5)
                     dynamic_stake = min(MAX_STAKE, BASE_STAKE * scale)
 
@@ -329,7 +325,6 @@ def monitor_live_and_notify():
                     send_telegram(msg)
                     log_alert(match_id_db, "surebet_ignorado", msg, profit_pct_base, None)
             else:
-                # No hay surebet, proponer cobertura del Over con Under
                 hedge_amount = compute_hedge_amount(BASE_STAKE, over_odds_prematch, under_live)
                 msg = (
                     f"Sin surebet {home} vs {away} (min {minute}). Cobertura sugerida: apostar {hedge_amount:.2f} {CURRENCY} "
@@ -347,7 +342,6 @@ def main():
     while True:
         now = datetime.now()
         try:
-            # Inserción diaria pre-match (mejor Over 2.5 por evento)
             if (last_insert_date is None or last_insert_date != now.date()) and now.hour == INSERT_HOUR:
                 rows = fetch_prematch_over25()
                 ids = insert_matches(rows)
@@ -365,5 +359,26 @@ def main():
 
         time.sleep(POLL_SECONDS)
 
+# ---------------------------------
+# FLASK (para Render Web Service)
+# ---------------------------------
+from flask import Flask
+
+app = Flask(__name__)
+
+@app.route("/")
+def index():
+    return "Surebet bot is running."
+
+@app.route("/health")
+def health():
+    return "OK", 200
+
 if __name__ == "__main__":
-    main()
+    # Corre la lógica principal en un hilo para mantener Flask respondiendo al puerto
+    import threading, os
+    t = threading.Thread(target=main, daemon=True)
+    t.start()
+
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host="0.0.0.0", port=port)
