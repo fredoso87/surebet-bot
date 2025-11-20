@@ -102,7 +102,6 @@ def valid_odds(odds):
 # PREMATCH: odds por evento (Over 2.5) usando markets -> books -> outcomes
 # ---------------------------------
 def fetch_event_odds_over25(event_id, locale="es"):
-    # URL correcta para mercados de un evento
     url = f"https://api.sportradar.com/oddscomparison-prematch/trial/v2/{locale}/sport_events/{event_id}/sport_event_markets.json"
     data = safe_request(url)
 
@@ -115,20 +114,33 @@ def fetch_event_odds_over25(event_id, locale="es"):
             for book in mercado.get("books", []):
                 casa = book.get("name")
                 for outcome in book.get("outcomes", []):
-                    n = (outcome.get("type") or outcome.get("name") or "").lower()
+                    tipo = (outcome.get("type") or "").lower()
                     total = outcome.get("total")
                     cuota = outcome.get("odds_decimal")
-                    if (n.startswith("over") or n.startswith("más")) and total == 2.5 and valid_odds(cuota):
+
+                    # Normalizar total a float
+                    try:
+                        total_val = float(total) if total else None
+                    except Exception:
+                        total_val = None
+
+                    if tipo == "over" and total_val == 2.5 and valid_odds(cuota):
                         cuota_val = float(cuota)
                         if mejor_cuota is None or cuota_val > mejor_cuota:
                             mejor_cuota = cuota_val
                             mejor_casa = casa
 
     if mejor_cuota:
-        return {"evento": event_id, "casa": mejor_casa or "Sportradar", "cuota_over25": mejor_cuota}
+        return {
+            "evento": event_id,
+            "casa": mejor_casa or "Sportradar",
+            "cuota_over25": mejor_cuota
+        }
     else:
-        return {"evento": event_id, "mensaje": "No se encontraron cuotas para Over 2.5"}
-
+        return {
+            "evento": event_id,
+            "mensaje": "No se encontraron cuotas para Over 2.5"
+        }
 
 # ---------------------------------
 # PREMATCH: schedules (hoy y mañana) + odds por evento
