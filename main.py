@@ -15,18 +15,18 @@ from flask import Flask, jsonify
 # ---------------------------------
 # CONFIG
 # ---------------------------------
-SPORTRADAR_API_KEY = os.getenv("SPORTRADAR_API_KEY", "xnCeW896IpZvYU3i8bSziTU9i4AthfjDn3Oa18Ie")
-TG_TOKEN = os.getenv("TG_TOKEN", "8252990863:AAEAN1qEh8xCwKT6-61rA1lp8nSHrHSFQLc")
-TG_CHAT  = os.getenv("TG_CHAT", "1206397833")
+SPORTRADAR_API_KEY = "xnCeW896IpZvYU3i8bSziTU9i4AthfjDn3Oa18Ie"
+TG_TOKEN = "8252990863:AAEAN1qEh8xCwKT6-61rA1lp8nSHrHSFQLc"
+TG_CHAT  = "1206397833"
 
-PG_HOST = os.getenv("PG_HOST", "dpg-d4b25nggjchc73f7d1o0-a")
-PG_PORT = int(os.getenv("PG_PORT", "5432"))
-PG_DB   = os.getenv("PG_DB", "surebet_db")
-PG_USER = os.getenv("PG_USER", "surebet_db_user")
-PG_PASS = os.getenv("PG_PASS", "bphDIBxCdPckefLT0SIOpB2WCEtiCCMU")
+PG_HOST = "dpg-d4b25nggjchc73f7d1o0-a"
+PG_PORT = 5432
+PG_DB   = "surebet_db"
+PG_USER = "surebet_db_user"
+PG_PASS = "bphDIBxCdPckefLT0SIOpB2WCEtiCCMU"
 
-INSERT_HOUR = int(os.getenv("INSERT_HOUR", "15"))   # hora local del servidor
-POLL_SECONDS = int(os.getenv("POLL_SECONDS", "300"))
+INSERT_HOUR = 15
+POLL_SECONDS = 300
 
 logging.basicConfig(
     level=logging.INFO,
