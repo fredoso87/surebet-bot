@@ -102,7 +102,8 @@ def valid_odds(odds):
 # PREMATCH: odds por evento (Over 2.5) usando markets -> books -> outcomes
 # ---------------------------------
 def fetch_event_odds_over25(event_id, locale="es"):
-    url = f"https://api.sportradar.com/oddscomparison-prematch/trial/v2/{locale}/sport_events/{event_id}/odds.json"
+    # URL correcta para mercados de un evento
+    url = f"https://api.sportradar.com/oddscomparison-prematch/trial/v2/{locale}/sport_events/{event_id}/sport_event_markets.json"
     data = safe_request(url)
 
     mejor_cuota = None
@@ -110,12 +111,10 @@ def fetch_event_odds_over25(event_id, locale="es"):
 
     for mercado in data.get("markets", []):
         nombre = (mercado.get("name") or "").lower()
-        # contemplamos nombres en español e inglés
         if nombre in {"total", "totales", "over/under", "goles más/menos"}:
             for book in mercado.get("books", []):
                 casa = book.get("name")
                 for outcome in book.get("outcomes", []):
-                    # algunos feeds usan "type", otros "name"
                     n = (outcome.get("type") or outcome.get("name") or "").lower()
                     total = outcome.get("total")
                     cuota = outcome.get("odds_decimal")
@@ -129,6 +128,7 @@ def fetch_event_odds_over25(event_id, locale="es"):
         return {"evento": event_id, "casa": mejor_casa or "Sportradar", "cuota_over25": mejor_cuota}
     else:
         return {"evento": event_id, "mensaje": "No se encontraron cuotas para Over 2.5"}
+
 
 # ---------------------------------
 # PREMATCH: schedules (hoy y mañana) + odds por evento
