@@ -4,8 +4,16 @@ from flask import Flask, jsonify
 
 app = Flask(__name__)
 
-# Tu API key la guardas como variable de entorno en Render
-API_KEY = "xnCeW896IpZvYU3i8bSziTU9i4AthfjDn3Oa18Ie"
+# La API key la tomas de variable de entorno en Render (más seguro que hardcodear)
+API_KEY = os.getenv("SPORTRADAR_API_KEY", "xnCeW896IpZvYU3i8bSziTU9i4AthfjDn3Oa18Ie")
+
+@app.route("/")
+def index():
+    return "Servicio activo. Endpoints: /health y /competitions"
+
+@app.route("/health")
+def health():
+    return "OK", 200
 
 @app.route("/competitions")
 def get_competitions():
@@ -16,19 +24,14 @@ def get_competitions():
     }
     try:
         resp = requests.get(url, headers=headers, timeout=10)
-        # Devuelvo status y contenido para que veas si terminó bien o mal
         return jsonify({
             "status_code": resp.status_code,
             "ok": resp.ok,
-            "response": resp.json() if resp.ok else resp.text
+            # si la respuesta es JSON válido lo pintamos, si no mostramos texto
+            "response": resp.json() if resp.ok else resp.text[:500]
         })
     except Exception as e:
         return jsonify({"error": str(e)}), 500
-
-
-@app.route("/health")
-def health():
-    return "OK", 200
 
 if __name__ == "__main__":
     # Render detecta el puerto desde la variable PORT
