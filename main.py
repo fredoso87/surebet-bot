@@ -63,6 +63,7 @@ def print_bookmakers():
 def load_bookmakers_map():
     all_bookmakers = []
     page = 1
+
     while True:
         url = "https://api.sportmonks.com/v3/odds/bookmakers"
         params = {"api_token": SPORTMONKS_TOKEN, "page": page}
@@ -74,14 +75,25 @@ def load_bookmakers_map():
             logging.error(f"Error obteniendo bookmakers (page={page}): {e}")
             break
 
+        # Agregar los bookmakers de esta página
         all_bookmakers.extend(data.get("data", []))
+
+        # Verificar si hay más páginas
         pagination = data.get("meta", {}).get("pagination", {})
         if not pagination.get("has_more"):
             break
         page += 1
 
-    return {bk.get("id"): bk.get("name") for bk in all_bookmakers if bk.get("id") is not None}
+    # Construir el diccionario {id: nombre}
+    bookmaker_map = {
+        bk.get("id"): bk.get("name")
+        for bk in all_bookmakers
+        if bk.get("id") is not None and bk.get("name") is not None
+    }
 
+    logging.info(f"✅ Bookmakers cargados: {len(bookmaker_map)} casas de apuesta")
+    return bookmaker_map
+    
 BOOKMAKER_MAP = load_bookmakers_map()
 BOOKMAKER_IDS = [1, 2, 9, 5, 20, 21, 24, 16, 26, 28, 22, 33, 35, 39]
 
