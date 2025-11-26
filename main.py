@@ -71,7 +71,7 @@ def get_all_bookmakers():
 
 # Lista configurable de IDs de casas a recorrer (vacía = sin filtro, recorre todas las disponibles en odds)
 BOOKMAKER_IDS = [
-    1,2,9,5,20,21,24,16,26,28,,22,33,35,39
+    1,2,9,5,20,21,24,16,26,28,22,33,35,39
 ]
 # Si prefieres cargar todas automáticamente, descomenta:
 # BOOKMAKER_IDS = [bk["id"] for bk in get_all_bookmakers()]
