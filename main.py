@@ -219,9 +219,9 @@ def fetch_prematch_over25():
             cuota = outcome.get("value")
 
             if BOOKMAKER_IDS and bookmaker_id not in BOOKMAKER_IDS:
-            # Aquí pintas el nombre usando el mapa
-            print(f"❌ Casa descartada: ID={bookmaker_id}, Nombre={BOOKMAKER_MAP.get(bookmaker_id, str(bookmaker_id))}")
-            continue
+                # Aquí pintas el nombre usando el mapa
+                print(f"❌ Casa descartada: ID={bookmaker_id}, Nombre={BOOKMAKER_MAP.get(bookmaker_id, str(bookmaker_id))}")
+                continue
 
             try:
                 cuota = float(cuota)
