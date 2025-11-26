@@ -45,6 +45,15 @@ logging.basicConfig(
 )
 
 # ---------------------------------
+# UTILIDAD: imprimir todas las casas de apuesta
+# ---------------------------------
+def print_bookmakers():
+    bookmakers = load_bookmakers_map()
+    print("\n Casas de apuesta disponibles:\n")
+    for bk_id, bk_name in sorted(bookmakers.items()):
+        print(f"ID: {bk_id:<3} → {bk_name}")
+
+# ---------------------------------
 # BOOKMAKERS CONFIG
 # ---------------------------------
 def load_bookmakers_map():
@@ -190,7 +199,9 @@ def fetch_prematch_over25():
         try:
             dt = datetime.fromisoformat(fecha_hora_raw.replace("Z", "+00:00"))
             dt_lima = dt.astimezone(LIMA_TZ)
-            fecha_hora_str = dt_lima.strftime("%d/%m/%Y %H:%M:%S")
+            # ➕ sumar 5 horas
+            dt_lima_plus5 = dt_lima + timedelta(hours=5)
+            fecha_hora_str = dt_lima_plus5.strftime("%d/%m/%Y %H:%M:%S")
         except Exception:
             fecha_hora_str = datetime.now(LIMA_TZ).strftime("%d/%m/%Y %H:%M:%S")
 
@@ -208,6 +219,7 @@ def fetch_prematch_over25():
             cuota = outcome.get("value")
 
             if BOOKMAKER_IDS and bookmaker_id not in BOOKMAKER_IDS:
+             print(f"❌ Casa descartada: ID={bookmaker_id}, Nombre={nombre_casa}")
                 continue
 
             try:
@@ -215,12 +227,12 @@ def fetch_prematch_over25():
             except Exception:
                 continue
 
-            if label == "over" and total_line in {"2.5", "2/2.5"}:
+            if label == "over" and total_line in {"2.5"}:
                 if mejor_over is None or cuota > mejor_over:
                     mejor_over = cuota
                     casa_over = BOOKMAKER_MAP.get(bookmaker_id, str(bookmaker_id))
 
-            if label == "under" and total_line in {"2.5", "2/2.5"}:
+            if label == "under" and total_line in {"2.5"}:
                 if mejor_under is None or cuota > mejor_under:
                     mejor_under = cuota
                     casa_under = BOOKMAKER_MAP.get(bookmaker_id, str(bookmaker_id))
@@ -229,7 +241,7 @@ def fetch_prematch_over25():
             "evento": fixture_id,
             "local": local,
             "visitante": visitante,
-            "fecha_hora": fecha_hora_str,   # dd/mm/yyyy HH24:MI:SS (Lima)
+            "fecha_hora": fecha_hora_str,   # dd/mm/yyyy HH24:MI:SS (Lima +5h)
             "cuota_over": mejor_over,
             "casa_over": casa_over,
             "cuota_under": mejor_under,
@@ -292,12 +304,12 @@ def insert_matches(rows):
             updated_at = NOW()
         RETURNING id
         """
-        # Nota: market='over_under', selection='over_2.5' para la fila clave; usamos esa para upsert y guardar conjunto de datos
+
         vals = (
             row["evento"],
             row["local"],
             row["visitante"],
-            row["fecha_hora"],
+            row["fecha_hora"],   # string dd/mm/yyyy HH24:MI:SS (Lima +5h)
             row.get("cuota_over"),
             row.get("casa_over"),
             row.get("cuota_under"),
@@ -443,6 +455,7 @@ def main():
     last_insert_date = None
 
     try:
+        print_bookmakers()
         run_cycle_prematch("ARRANQUE")
         last_insert_date = datetime.now(LIMA_TZ).date()
     except Exception as e:
