@@ -52,10 +52,9 @@ logging.basicConfig(
 # ---------------------------------
 def print_bookmakers():
     bookmakers = load_bookmakers_map()
-    logging.info("📋 Casas de apuesta disponibles:")
+    logging.info("📋 Casas de apuesta disponibles (Sportmonks API):")
     for bk_id, bk_name in sorted(bookmakers.items()):
-        logging.info(f"ID: {bk_id:<3} → {bk_name}")
-
+        logging.info(f"ID={bk_id} → {bk_name}")
 
 # ---------------------------------
 # BOOKMAKERS CONFIG
@@ -63,37 +62,50 @@ def print_bookmakers():
 def load_bookmakers_map():
     all_bookmakers = []
     page = 1
+    per_page = 100  # ajusta según límite del API
 
     while True:
         url = "https://api.sportmonks.com/v3/odds/bookmakers"
-        params = {"api_token": SPORTMONKS_TOKEN, "page": page}
+        params = {"api_token": SPORTMONKS_TOKEN, "page": page, "per_page": per_page}
         try:
             r = requests.get(url, params=params, timeout=20)
             r.raise_for_status()
-            data = r.json()
+            payload = r.json()
         except Exception as e:
             logging.error(f"Error obteniendo bookmakers (page={page}): {e}")
             break
 
-        # Agregar los bookmakers de esta página
-        all_bookmakers.extend(data.get("data", []))
+        data = payload.get("data", [])
+        meta = payload.get("meta", {})
+        pagination = meta.get("pagination", {})
 
-        # Verificar si hay más páginas
-        pagination = data.get("meta", {}).get("pagination", {})
-        if not pagination.get("has_more"):
-            break
-        page += 1
+        all_bookmakers.extend(data)
+        logging.info(f"📄 Bookmakers página {page}: {len(data)} items (acumulado: {len(all_bookmakers)})")
 
-    # Construir el diccionario {id: nombre}
+        # Prioriza next_page si existe; si no, usa has_more
+        next_page = pagination.get("next_page")
+        has_more = pagination.get("has_more")
+
+        if next_page:
+            page = next_page
+            continue
+
+        if has_more:
+            page += 1
+            continue
+
+        # Sin next_page y sin has_more: fin
+        break
+
     bookmaker_map = {
         bk.get("id"): bk.get("name")
         for bk in all_bookmakers
         if bk.get("id") is not None and bk.get("name") is not None
     }
 
-    logging.info(f"✅ Bookmakers cargados: {len(bookmaker_map)} casas de apuesta")
+    logging.info(f"✅ Bookmakers cargados: {len(bookmaker_map)} casas de apuesta (total crudo: {len(all_bookmakers)})")
     return bookmaker_map
-    
+   
 BOOKMAKER_MAP = load_bookmakers_map()
 BOOKMAKER_IDS = [1, 2, 9, 5, 20, 21, 24, 16, 26, 28, 22, 33, 35, 39]
 
