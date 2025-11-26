@@ -197,13 +197,12 @@ def log_alert(match_id, kind, message, profit_pct, profit_abs):
 def fetch_prematch_over25():
     hoy = datetime.utcnow().date()
     manana = hoy + timedelta(days=1)
-
-    # Endpoint entre hoy y mañana con paginación
     base_url = f"{SPORTMONKS_BASE}/fixtures/between/{hoy.isoformat()}/{manana.isoformat()}"
     per_page = 50
     page = 1
     all_fixtures = []
 
+    # Paginación de fixtures
     while True:
         try:
             url = f"{base_url}?api_token={SPORTMONKS_TOKEN}&per_page={per_page}&page={page}&include=participants"
@@ -231,8 +230,8 @@ def fetch_prematch_over25():
         visitante = participants[1].get("name")
         fecha_hora = fixture.get("starting_at")
 
-        # Consultamos el mercado Over/Under (id=5). Mantengo tu elección de usar inplay markets para consistencia.
-        odds_data = sportmonks_request(f"/odds/inplay/fixtures/{fixture_id}/markets/5")
+        # ✅ Ahora usamos el endpoint pre-match odds con marketId=7
+        odds_data = sportmonks_request(f"/odds/pre-match/fixtures/{fixture_id}/markets/7")
         mejor_cuota = None
         mejor_casa = None
 
@@ -241,7 +240,6 @@ def fetch_prematch_over25():
             bookmaker_id = bookmaker_info.get("id")
             bookmaker_name = bookmaker_info.get("name")
 
-            # Filtro de casas configuradas (si la lista está vacía, no se filtra)
             if BOOKMAKER_IDS and bookmaker_id not in BOOKMAKER_IDS:
                 continue
 
@@ -267,7 +265,6 @@ def fetch_prematch_over25():
                 "stake": BASE_STAKE
             })
     return resultados
-
 # ---------------------------------
 # INSERT DB
 # ---------------------------------
