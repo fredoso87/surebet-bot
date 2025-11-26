@@ -47,11 +47,15 @@ logging.basicConfig(
 # ---------------------------------
 # UTILIDAD: imprimir todas las casas de apuesta
 # ---------------------------------
+# ---------------------------------
+# UTILIDAD: imprimir todas las casas de apuesta
+# ---------------------------------
 def print_bookmakers():
     bookmakers = load_bookmakers_map()
-    print("\n Casas de apuesta disponibles:\n")
+    logging.info("📋 Casas de apuesta disponibles:")
     for bk_id, bk_name in sorted(bookmakers.items()):
-        print(f"ID: {bk_id:<3} → {bk_name}")
+        logging.info(f"ID: {bk_id:<3} → {bk_name}")
+
 
 # ---------------------------------
 # BOOKMAKERS CONFIG
@@ -220,7 +224,7 @@ def fetch_prematch_over25():
 
             if BOOKMAKER_IDS and bookmaker_id not in BOOKMAKER_IDS:
                 # Aquí pintas el nombre usando el mapa
-                print(f"❌ Casa descartada: ID={bookmaker_id}, Nombre={BOOKMAKER_MAP.get(bookmaker_id, str(bookmaker_id))}")
+                logging.info(f"❌ Casa descartada: ID={bookmaker_id}, Nombre={BOOKMAKER_MAP.get(bookmaker_id, str(bookmaker_id))}")
                 continue
 
             try:
