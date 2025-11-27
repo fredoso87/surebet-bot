@@ -68,7 +68,7 @@ def load_bookmakers_map():
         params = {"api_token": SPORTMONKS_TOKEN, "page": page}
 
         full_url = f"{url}?api_token={SPORTMONKS_TOKEN}&page={page}"
-        logging.info(f"🌐 Consumiento API bookmakers → {full_url}")
+        #logging.info(f"🌐 Consumiento API bookmakers → {full_url}")
 
         try:
             r = requests.get(url, params=params, timeout=20)
@@ -198,9 +198,9 @@ def fetch_prematch_over25():
 
     while True:
         try:
-            
             url = f"{base_url}?api_token={SPORTMONKS_TOKEN}&page={page}&include=participants"
             logging.info(f"🌐 Consumiento API fixtures → {url}")
+
             r = requests.get(url, timeout=20)
             r.raise_for_status()
             data = r.json()
@@ -209,8 +209,14 @@ def fetch_prematch_over25():
             break
 
         all_fixtures.extend(data.get("data", []))
-        pagination = data.get("meta", {}).get("pagination", {})
-        
+        pagination = data.get("pagination", {})  # 👈 directo en raíz, no en meta
+
+        logging.info(f"📄 Respuesta API fixtures page={page}: "
+                     f"count={pagination.get('count')} per_page={pagination.get('per_page')} "
+                     f"current_page={pagination.get('current_page')} has_more={pagination.get('has_more')} "
+                     f"next_page={pagination.get('next_page')}")
+        logging.info(f"✅ Fixtures acumulados tras page={page}: {len(all_fixtures)}")
+
         if not pagination or not pagination.get("has_more"):
             break
         page += 1
@@ -220,7 +226,7 @@ def fetch_prematch_over25():
         fixture_id = fixture.get("id")
         participants = fixture.get("participants", [])
         if len(participants) < 2:
-            continue
+            continue  # 👈 corregido el typo "continuex"
 
         local = participants[0].get("name")
         visitante = participants[1].get("name")
@@ -229,7 +235,6 @@ def fetch_prematch_over25():
         try:
             dt = datetime.fromisoformat(fecha_hora_raw.replace("Z", "+00:00"))
             dt_lima = dt.astimezone(LIMA_TZ)
-            # ➕ sumar 5 horas
             dt_lima_plus5 = dt_lima + timedelta(hours=5)
             fecha_hora_str = dt_lima_plus5.strftime("%d/%m/%Y %H:%M:%S")
         except Exception:
@@ -249,8 +254,6 @@ def fetch_prematch_over25():
             cuota = outcome.get("value")
 
             if BOOKMAKER_IDS and bookmaker_id not in BOOKMAKER_IDS:
-                # Aquí pintas el nombre usando el mapa
-                logging.info(f"❌ Casa descartada: ID={bookmaker_id}, Nombre={BOOKMAKER_MAP.get(bookmaker_id, str(bookmaker_id))}")
                 continue
 
             try:
@@ -272,7 +275,7 @@ def fetch_prematch_over25():
             "evento": fixture_id,
             "local": local,
             "visitante": visitante,
-            "fecha_hora": fecha_hora_str,   # dd/mm/yyyy HH24:MI:SS (Lima +5h)
+            "fecha_hora": fecha_hora_str,
             "cuota_over": mejor_over,
             "casa_over": casa_over,
             "cuota_under": mejor_under,
@@ -486,7 +489,7 @@ def main():
     last_insert_date = None
 
     try:
-        print_bookmakers()
+        #print_bookmakers()
         run_cycle_prematch("ARRANQUE")
         last_insert_date = datetime.now(LIMA_TZ).date()
     except Exception as e:
