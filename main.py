@@ -62,7 +62,7 @@ def print_bookmakers():
 def load_bookmakers_map():
     all_bookmakers = []
     page = 1
-    per_page = 25  # puedes subirlo a 50 o 100 si el API lo permite
+    per_page = 25  # puedes subirlo si el API lo permite
 
     while True:
         url = "https://api.sportmonks.com/v3/odds/bookmakers"
@@ -81,12 +81,19 @@ def load_bookmakers_map():
         all_bookmakers.extend(data)
         logging.info(f"📄 Bookmakers página {page}: {len(data)} items (acumulado: {len(all_bookmakers)})")
 
-        # Condición de corte: si no hay paginación o ya llegamos al total de páginas
-        total_pages = pagination.get("total_pages", 1)
-        if not pagination or page >= total_pages:
+        # Si no hay más páginas, corta
+        if not pagination.get("has_more"):
             break
 
-        page += 1
+        # Si el API devuelve next_page, úsalo
+        next_page_url = pagination.get("next_page")
+        if next_page_url:
+            # extrae el número de página de la URL
+            from urllib.parse import urlparse, parse_qs
+            qs = parse_qs(urlparse(next_page_url).query)
+            page = int(qs.get("page", [page + 1])[0])
+        else:
+            page += 1
 
     bookmaker_map = {
         bk.get("id"): bk.get("name")
@@ -96,7 +103,6 @@ def load_bookmakers_map():
 
     logging.info(f"✅ Bookmakers cargados: {len(bookmaker_map)} casas de apuesta (total crudo: {len(all_bookmakers)})")
     return bookmaker_map
-
    
 BOOKMAKER_MAP = load_bookmakers_map()
 BOOKMAKER_IDS = [1, 2, 9, 5, 20, 21, 24, 16, 26, 28, 22, 33, 35, 39]
