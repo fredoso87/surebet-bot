@@ -11,7 +11,7 @@ from flask import Flask
 import threading
 import os
 import pytz
-
+from urllib.parse import urlparse, parse_qs
 # ---------------------------------
 # CONFIG
 # ---------------------------------
@@ -67,29 +67,36 @@ def load_bookmakers_map():
     while True:
         url = "https://api.sportmonks.com/v3/odds/bookmakers"
         params = {"api_token": SPORTMONKS_TOKEN, "page": page, "per_page": per_page}
+
+        # Construir la URL completa para log
+        full_url = f"{url}?api_token={SPORTMONKS_TOKEN}&page={page}&per_page={per_page}"
+        logging.info(f"🌐 Consumiento API bookmakers → {full_url}")
+
         try:
             r = requests.get(url, params=params, timeout=20)
             r.raise_for_status()
             payload = r.json()
         except Exception as e:
-            logging.error(f"Error obteniendo bookmakers (page={page}): {e}")
+            logging.error(f"❌ Error obteniendo bookmakers (page={page}): {e}")
             break
 
         data = payload.get("data", [])
         pagination = payload.get("meta", {}).get("pagination", {})
 
-        all_bookmakers.extend(data)
-        logging.info(f"📄 Bookmakers página {page}: {len(data)} items (acumulado: {len(all_bookmakers)})")
+        logging.info(f"📄 Respuesta API page={page}: count={pagination.get('count')} "
+                     f"per_page={pagination.get('per_page')} current_page={pagination.get('current_page')} "
+                     f"has_more={pagination.get('has_more')} next_page={pagination.get('next_page')}")
 
-        # Si no hay más páginas, corta
+        all_bookmakers.extend(data)
+        logging.info(f"✅ Bookmakers acumulados tras page={page}: {len(all_bookmakers)}")
+
+        # Condición de corte
         if not pagination.get("has_more"):
             break
 
-        # Si el API devuelve next_page, úsalo
+        # Avanza a la siguiente página usando next_page si existe
         next_page_url = pagination.get("next_page")
         if next_page_url:
-            # extrae el número de página de la URL
-            from urllib.parse import urlparse, parse_qs
             qs = parse_qs(urlparse(next_page_url).query)
             page = int(qs.get("page", [page + 1])[0])
         else:
@@ -101,8 +108,9 @@ def load_bookmakers_map():
         if bk.get("id") is not None and bk.get("name") is not None
     }
 
-    logging.info(f"✅ Bookmakers cargados: {len(bookmaker_map)} casas de apuesta (total crudo: {len(all_bookmakers)})")
+    logging.info(f"🎯 Bookmakers cargados: {len(bookmaker_map)} casas de apuesta (total crudo: {len(all_bookmakers)})")
     return bookmaker_map
+
    
 BOOKMAKER_MAP = load_bookmakers_map()
 BOOKMAKER_IDS = [1, 2, 9, 5, 20, 21, 24, 16, 26, 28, 22, 33, 35, 39]
