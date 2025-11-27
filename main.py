@@ -200,8 +200,7 @@ def compute_surebet_stakes(odds_over, odds_under, stake_total):
 # ---------------------------------
 def fetch_prematch_over25():
     hoy = datetime.now(LIMA_TZ).date()
-    manana = hoy + timedelta(days=1)
-    #base_url = f"{SPORTMONKS_BASE}/fixtures/between/2025-11-23/2025-11-29"
+    manana = hoy + timedelta(days=3)
     base_url = f"{SPORTMONKS_BASE}/fixtures/between/{hoy.isoformat()}/{manana.isoformat()}"
     page = 1
     all_fixtures = []
