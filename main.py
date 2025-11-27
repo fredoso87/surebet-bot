@@ -301,7 +301,7 @@ def fetch_prematch_over25():
                     f"Under 2.5: {mejor_under} ({casa_under}) → Apostar {stake_under:.2f}\n"
                     f"Ganancia asegurada: {ganancia:.2f} con stake {BASE_STAKE}"
                 )
-                send_telegram_alert(mensaje)
+                send_telegram(mensaje)
                 logging.info(f"Alerta enviada por Telegram: {mensaje}")
 
     return resultados
