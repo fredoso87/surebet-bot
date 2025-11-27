@@ -284,7 +284,25 @@ def fetch_prematch_over25():
             "cuota_under": mejor_under,
             "casa_under": normalize_text(casa_under)
         })
-
+        
+        # 👇 ALERTA TELEGRAM si hay surebet
+        if mejor_over and mejor_under:
+            inv_sum = (1/mejor_over) + (1/mejor_under)
+            if inv_sum < 1:
+                stake_over = BASE_STAKE * (1/mejor_over) / inv_sum
+                stake_under = BASE_STAKE * (1/mejor_under) / inv_sum
+                ganancia = min(stake_over * mejor_over, stake_under * mejor_under) - BASE_STAKE
+        
+                mensaje = (
+                    f"🔥 Surebet Prematch encontrado!\n"
+                    f"{local} vs {visitante}\n"
+                    f"Fecha: {fecha_hora_str}\n"
+                    f"Over 2.5: {mejor_over} ({casa_over}) → Apostar {stake_over:.2f}\n"
+                    f"Under 2.5: {mejor_under} ({casa_under}) → Apostar {stake_under:.2f}\n"
+                    f"Ganancia asegurada: {ganancia:.2f} con stake {BASE_STAKE}"
+                )
+                send_telegram_alert(mensaje)
+                logging.info(f"Alerta enviada por Telegram: {mensaje}")
 
     return resultados
 
@@ -493,29 +511,36 @@ def run_cycle_prematch(tag):
 
 def main():
     logging.info("Script iniciado (Sportmonks v3 football).")
-    last_insert_date = None
 
     try:
         #print_bookmakers()
         run_cycle_prematch("ARRANQUE")
-        last_insert_date = datetime.now(LIMA_TZ).date()
     except Exception as e:
         logging.error(f"Error en inserción inicial: {e}")
-
+        
+    last_prematch = time.time()
+    last_monitor = time.time()
+    
     while True:
         now = datetime.now(LIMA_TZ)
-        try:
-            if (last_insert_date is None or last_insert_date != now.date()) and now.hour == INSERT_HOUR:
-                run_cycle_prematch("DIARIO")
-                last_insert_date = now.date()
-        except Exception as e:
-            logging.error(f"Error en inserción diaria: {e}")
+        # Cada 15 minutos (900 segundos)
+        if time.time() - last_prematch >= 900:
+            try:
+                run_cycle_prematch("CADA_15_MIN")
+                logging.info(f"Ejecutado ciclo prematch a las {now}")
+            except Exception as e:
+                logging.error(f"Error en inserción periódica: {e}")
+            last_prematch = time.time()
 
-        try:
-            monitor_live_and_notify()
-            heartbeat()
-        except Exception as e:
-            logging.error(f"Error en monitoreo: {e}")
+        # Cada 2 minutos (120 segundos)
+        if time.time() - last_monitor >= 120:
+            try:
+                monitor_live_and_notify()
+                heartbeat()
+                logging.info(f"Ejecutado monitoreo a las {now}")
+            except Exception as e:
+                logging.error(f"Error en monitoreo: {e}")
+            last_monitor = time.time()
 
         time.sleep(POLL_SECONDS)
 
