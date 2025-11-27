@@ -292,17 +292,17 @@ def fetch_prematch_over25():
                 stake_over = BASE_STAKE * (1/mejor_over) / inv_sum
                 stake_under = BASE_STAKE * (1/mejor_under) / inv_sum
                 ganancia = min(stake_over * mejor_over, stake_under * mejor_under) - BASE_STAKE
-        
-                mensaje = (
-                    f"🔥 Surebet Prematch encontrado!\n"
-                    f"{local} vs {visitante}\n"
-                    f"Fecha: {fecha_hora_str}\n"
-                    f"Over 2.5: {mejor_over} ({casa_over}) → Apostar {stake_over:.2f}\n"
-                    f"Under 2.5: {mejor_under} ({casa_under}) → Apostar {stake_under:.2f}\n"
-                    f"Ganancia asegurada: {ganancia:.2f} con stake {BASE_STAKE}"
-                )
-                send_telegram(mensaje)
-                logging.info(f"Alerta enviada por Telegram: {mensaje}")
+                if ganancia > 5.0:
+                    mensaje = (
+                        f"🔥 Surebet Prematch encontrado!\n"
+                        f"{local} vs {visitante}\n"
+                        f"Fecha: {fecha_hora_str}\n"
+                        f"Over 2.5: {mejor_over} ({casa_over}) → Apostar {stake_over:.2f}\n"
+                        f"Under 2.5: {mejor_under} ({casa_under}) → Apostar {stake_under:.2f}\n"
+                        f"Ganancia asegurada: {ganancia:.2f} con stake {BASE_STAKE}"
+                    )
+                    send_telegram(mensaje)
+                    logging.info(f"Alerta enviada por Telegram: {mensaje}")
 
     return resultados
 
