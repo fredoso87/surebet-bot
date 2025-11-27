@@ -191,14 +191,16 @@ def compute_surebet_stakes(odds_over, odds_under, stake_total):
 def fetch_prematch_over25():
     hoy = datetime.now(LIMA_TZ).date()
     manana = hoy + timedelta(days=1)
-    base_url = f"{SPORTMONKS_BASE}/fixtures/between/{hoy.isoformat()}/{manana.isoformat()}"
-    per_page = 50
+    base_url = f"{SPORTMONKS_BASE}/fixtures/between/2025-11-23/2025-11-29"
+    #base_url = f"{SPORTMONKS_BASE}/fixtures/between/{hoy.isoformat()}/{manana.isoformat()}"
     page = 1
     all_fixtures = []
 
     while True:
         try:
-            url = f"{base_url}?api_token={SPORTMONKS_TOKEN}&per_page={per_page}&page={page}&include=participants"
+            
+            url = f"{base_url}?api_token={SPORTMONKS_TOKEN}&page={page}&include=participants"
+            logging.info(f"🌐 Consumiento API fixtures → {url}")
             r = requests.get(url, timeout=20)
             r.raise_for_status()
             data = r.json()
@@ -208,7 +210,8 @@ def fetch_prematch_over25():
 
         all_fixtures.extend(data.get("data", []))
         pagination = data.get("meta", {}).get("pagination", {})
-        if not pagination.get("has_more"):
+        
+        if not pagination or not pagination.get("has_more"):
             break
         page += 1
 
