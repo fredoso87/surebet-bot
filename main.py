@@ -201,16 +201,15 @@ def compute_surebet_stakes(odds_over, odds_under, stake_total):
 def fetch_prematch_over25():
     hoy = datetime.now(LIMA_TZ).date()
     manana = hoy + timedelta(days=1)
-    base_url = f"{SPORTMONKS_BASE}/fixtures/between/2025-11-23/2025-11-29"
-    #base_url = f"{SPORTMONKS_BASE}/fixtures/between/{hoy.isoformat()}/{manana.isoformat()}"
+    #base_url = f"{SPORTMONKS_BASE}/fixtures/between/2025-11-23/2025-11-29"
+    base_url = f"{SPORTMONKS_BASE}/fixtures/between/{hoy.isoformat()}/{manana.isoformat()}"
     page = 1
     all_fixtures = []
 
     while True:
         try:
             url = f"{base_url}?api_token={SPORTMONKS_TOKEN}&page={page}&include=participants"
-            logging.info(f"🌐 Consumiento API fixtures → {url}")
-
+            logging.info(f"URL de la API pre-match={url}")
             r = requests.get(url, timeout=20)
             r.raise_for_status()
             data = r.json()
@@ -220,11 +219,6 @@ def fetch_prematch_over25():
 
         all_fixtures.extend(data.get("data", []))
         pagination = data.get("pagination", {})  # 👈 directo en raíz, no en meta
-
-        logging.info(f"📄 Respuesta API fixtures page={page}: "
-                     f"count={pagination.get('count')} per_page={pagination.get('per_page')} "
-                     f"current_page={pagination.get('current_page')} has_more={pagination.get('has_more')} "
-                     f"next_page={pagination.get('next_page')}")
         logging.info(f"✅ Fixtures acumulados tras page={page}: {len(all_fixtures)}")
 
         if not pagination or not pagination.get("has_more"):
@@ -319,8 +313,7 @@ def insert_matches(rows):
             profit_abs = p_abs
             profit_pct = p_pct
         
-        logging.info(f"Equipo Local={row.get('local')}")
-        logging.info(f"Equipo visitante={row.get('visitante')}")
+        
         q = """
         INSERT INTO matches (
             event_id, home_team, away_team, commence_time,
@@ -488,10 +481,12 @@ def heartbeat():
         _last_heartbeat = now
 
 def run_cycle_prematch(tag):
+    logging.info(f"Iniciando la carga de FIXTURE pre-match")
     rows = fetch_prematch_over25()
     ids = []
     try:
         ids = insert_matches(rows)
+        logging.info(f"[{tag}] Se esta insertando a la BD : {len(ids)}")
     except Exception as e:
         logging.error(f"Error insert prematch: {e}")
     logging.info(f"[{tag}] Prematch Over/Under 2.5 procesados: {len(ids)}")
