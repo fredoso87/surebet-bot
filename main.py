@@ -11,6 +11,7 @@ from flask import Flask
 import threading
 import os
 import pytz
+import unicodedata
 from urllib.parse import urlparse, parse_qs
 # ---------------------------------
 # CONFIG
@@ -55,6 +56,15 @@ def print_bookmakers():
     logging.info("📋 Casas de apuesta disponibles (Sportmonks API):")
     for bk_id, bk_name in sorted(bookmakers.items()):
         logging.info(f"ID={bk_id} → {bk_name}")
+def normalize_text(text: str) -> str:
+    """
+    Normaliza un string eliminando acentos y caracteres especiales
+    que no son representables en WIN1252.
+    Ejemplo: 'Łódź' -> 'Lodz', 'São Paulo' -> 'Sao Paulo'
+    """
+    if not text:
+        return text
+    return unicodedata.normalize("NFKD", text).encode("ascii", "ignore").decode("ascii")
 
 # ---------------------------------
 # BOOKMAKERS CONFIG
@@ -273,14 +283,15 @@ def fetch_prematch_over25():
 
         resultados.append({
             "evento": fixture_id,
-            "local": local,
-            "visitante": visitante,
+            "local": normalize_text(local),
+            "visitante": normalize_text(visitante),
             "fecha_hora": fecha_hora_str,
             "cuota_over": mejor_over,
-            "casa_over": casa_over,
+            "casa_over": normalize_text(casa_over),
             "cuota_under": mejor_under,
-            "casa_under": casa_under
+            "casa_under": normalize_text(casa_under)
         })
+
 
     return resultados
 
@@ -307,7 +318,9 @@ def insert_matches(rows):
             stake_under = s_under
             profit_abs = p_abs
             profit_pct = p_pct
-
+        
+        logging.info(f"Equipo Local={row.get('local')}")
+        logging.info(f"Equipo visitante={row.get('visitante')}")
         q = """
         INSERT INTO matches (
             event_id, home_team, away_team, commence_time,
