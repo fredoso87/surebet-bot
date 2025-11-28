@@ -15,6 +15,9 @@ import unicodedata
 from urllib.parse import urlparse, parse_qs
 from selenium import webdriver
 from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+
 # ---------------------------------
 # CONFIG
 # ---------------------------------
@@ -116,27 +119,30 @@ def load_bookmakers_map():
 
     
 BOOKMAKER_MAP = load_bookmakers_map()
-BOOKMAKER_IDS = [212,127,152,83,84,28,26,24,16,9,2,8,35,18,20,21,23,123,91,216,215,1,5,24,22,33,35,39]
+BOOKMAKER_IDS = [212,127,152,83,84,28,26,24,16,9,2,8,35,18,20,21,123,91,216,215,1,5,24,22,33,35,39]
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
 
 def scrape_bet365_over25(match_url):
-    """
-    Abre Bet365 y devuelve cuotas reales de Over/Under 2.5.
-    Retorna dict: {"over": float, "under": float}
-    """
     options = webdriver.ChromeOptions()
-    options.add_argument("--headless")  # sin ventana
+    options.add_argument("--headless")
     driver = webdriver.Chrome(options=options)
 
     try:
         driver.get(match_url)
-        time.sleep(5)  # espera carga
 
-        # ⚠️ Ajusta los selectores según la estructura actual de Bet365
-        over_element = driver.find_element(By.XPATH, "//div[contains(text(),'Más de 2.5')]/following-sibling::div")
-        under_element = driver.find_element(By.XPATH, "//div[contains(text(),'Menos de 2.5')]/following-sibling::div")
+        wait = WebDriverWait(driver, 15)
+        odds_elements = wait.until(
+            EC.presence_of_all_elements_located((By.CLASS_NAME, "gl-ParticipantOddsOnly_Odds"))
+        )
 
-        cuota_over = float(over_element.text)
-        cuota_under = float(under_element.text)
+        # Aquí odds_elements trae todas las cuotas visibles
+        cuotas = [el.text for el in odds_elements]
+        logging.info(f"Cuotas encontradas en Bet365: {cuotas}")
+
+        # ⚠️ Ajusta la lógica para identificar cuál corresponde a Over/Under 2.5
+        cuota_over = float(cuotas[0])
+        cuota_under = float(cuotas[1])
 
         return {"over": cuota_over, "under": cuota_under}
     except Exception as e:
@@ -327,7 +333,7 @@ def fetch_prematch_over25():
                     casa_under = BOOKMAKER_MAP.get(bookmaker_id, str(bookmaker_id))
 
         # 👇 Si el fixture tiene Bet365, reemplazamos con scraping real
-        if any(o.get("bookmaker_id") == BET365_ID for o in odds_data.get("data", [])):
+        if any(o.get("bookmaker_id") == 2 for o in odds_data.get("data", [])):
             bet365_url = f"https://www.bet365.com/#/AC/B1/C1/D13/E{fixture_id}"  # ⚠️ Ajusta URL real
             bet365_odds = scrape_bet365_over25(bet365_url)
             if bet365_odds.get("over"):
