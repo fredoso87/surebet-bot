@@ -29,7 +29,7 @@ PG_USER = "surebet_db_user"
 PG_PASS = "bphDIBxCdPckefLT0SIOpB2WCEtiCCMU"
 
 INSERT_HOUR = 15
-POLL_SECONDS = 15
+POLL_SECONDS = 300
 BASE_STAKE = 100.0
 MAX_STAKE = 500.0
 CURRENCY = "USD"
@@ -570,38 +570,42 @@ def run_cycle_prematch(tag):
     logging.info(f"[{tag}] Prematch Over/Under 2.5 procesados: {len(ids)}")
     send_telegram(f"[{tag}] Prematch Over/Under 2.5 en DB: {len(ids)}")
 
-
 def main():
     logging.info("Script iniciado (Sportmonks v3 football).")
-        
-    # Inicializa en el pasado para que se ejecuten en la primera vuelta
+
+    # Inicializa en el pasado para que se ejecute en la primera vuelta
     last_prematch = time.time() - 900
     last_monitor = time.time() - 120
-    
+
     while True:
         now = datetime.now(LIMA_TZ)
-        
+
+        # Diferencia en segundos desde última ejecución
+        diff_prematch = time.time() - last_prematch
+        diff_monitor = time.time() - last_monitor
+
         # Cada 15 minutos
-        if time.time() - last_prematch >= 900:
+        if diff_prematch >= 900:
             try:
                 run_cycle_prematch("CADA_15_MIN")
-                logging.info(f"Ejecutado ciclo prematch a las {now}")
+                logging.info(f"[PREMATCH] Ejecutado ciclo prematch a las {now.strftime('%d/%m/%Y %H:%M:%S')} "
+                             f"(diff={diff_prematch:.2f}s)")
             except Exception as e:
                 logging.error(f"Error en inserción periódica: {e}")
             last_prematch = time.time()
 
         # Cada 2 minutos
-        if time.time() - last_monitor >= 120:
+        if diff_monitor >= 120:
             try:
                 monitor_live_and_notify()
                 heartbeat()
-                logging.info(f"Ejecutado monitoreo a las {now}")
+                logging.info(f"[MONITOR] Ejecutado monitoreo a las {now.strftime('%d/%m/%Y %H:%M:%S')} "
+                             f"(diff={diff_monitor:.2f}s)")
             except Exception as e:
                 logging.error(f"Error en monitoreo: {e}")
             last_monitor = time.time()
 
         time.sleep(POLL_SECONDS)
-
 
 # ---------------------------------
 # FLASK (Render Web Service)
