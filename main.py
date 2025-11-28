@@ -13,6 +13,8 @@ import os
 import pytz
 import unicodedata
 from urllib.parse import urlparse, parse_qs
+from selenium import webdriver
+from selenium.webdriver.common.by import By
 # ---------------------------------
 # CONFIG
 # ---------------------------------
@@ -33,6 +35,7 @@ POLL_SECONDS = 300
 BASE_STAKE = 100.0
 MAX_STAKE = 500.0
 CURRENCY = "USD"
+BET365_ID = 2  # Sportmonks devuelve Bet365 con id=2
 
 LIMA_TZ = pytz.timezone("America/Lima")
 
@@ -45,9 +48,6 @@ logging.basicConfig(
     ]
 )
 
-# ---------------------------------
-# UTILIDAD: imprimir todas las casas de apuesta
-# ---------------------------------
 # ---------------------------------
 # UTILIDAD: imprimir todas las casas de apuesta
 # ---------------------------------
@@ -116,7 +116,34 @@ def load_bookmakers_map():
 
     
 BOOKMAKER_MAP = load_bookmakers_map()
-BOOKMAKER_IDS = [212,127,152,83,84,28,26,24,23,16,9,2,8,35,18,20,21,23,123,91,216,215,1,5,24,22,33,35,39]
+BOOKMAKER_IDS = [212,127,152,83,84,28,26,24,16,9,2,8,35,18,20,21,23,123,91,216,215,1,5,24,22,33,35,39]
+
+def scrape_bet365_over25(match_url):
+    """
+    Abre Bet365 y devuelve cuotas reales de Over/Under 2.5.
+    Retorna dict: {"over": float, "under": float}
+    """
+    options = webdriver.ChromeOptions()
+    options.add_argument("--headless")  # sin ventana
+    driver = webdriver.Chrome(options=options)
+
+    try:
+        driver.get(match_url)
+        time.sleep(5)  # espera carga
+
+        # ⚠️ Ajusta los selectores según la estructura actual de Bet365
+        over_element = driver.find_element(By.XPATH, "//div[contains(text(),'Más de 2.5')]/following-sibling::div")
+        under_element = driver.find_element(By.XPATH, "//div[contains(text(),'Menos de 2.5')]/following-sibling::div")
+
+        cuota_over = float(over_element.text)
+        cuota_under = float(under_element.text)
+
+        return {"over": cuota_over, "under": cuota_under}
+    except Exception as e:
+        logging.error(f"Error scraping Bet365: {e}")
+        return {}
+    finally:
+        driver.quit()
 
 # ---------------------------------
 # DB
@@ -198,6 +225,7 @@ def compute_surebet_stakes(odds_over, odds_under, stake_total):
 # ---------------------------------
 # PREMATCH: mejores Over/Under 2.5 (marketId=7) + surebet prematch
 # ---------------------------------
+
 def fetch_prematch_over25():
     hoy = datetime.now(LIMA_TZ).date()
     manana = hoy + timedelta(days=3)
@@ -235,7 +263,7 @@ def fetch_prematch_over25():
         visitante = participants[1].get("name")
         fecha_hora_raw = fixture.get("starting_at")
 
-        # ⏱ Ajuste de fecha +5h
+        # Ajuste de fecha +5h
         try:
             dt = datetime.fromisoformat(fecha_hora_raw.replace("Z", "+00:00"))
             dt_lima = dt.astimezone(LIMA_TZ)
@@ -244,7 +272,7 @@ def fetch_prematch_over25():
         except Exception:
             fecha_hora_str = (datetime.now(LIMA_TZ) + timedelta(hours=5)).strftime("%d/%m/%Y %H:%M:%S")
 
-        # ⏱ created_at +5h con fallback
+        # created_at y updated_at con fallback
         created_raw = fixture.get("created_at")
         try:
             if created_raw:
@@ -256,7 +284,6 @@ def fetch_prematch_over25():
         except Exception:
             created_str = (datetime.now(LIMA_TZ) + timedelta(hours=5)).strftime("%d/%m/%Y %H:%M:%S")
 
-        # ⏱ latest_bookmaker_update +5h con fallback
         updated_raw = fixture.get("latest_bookmaker_update")
         try:
             if updated_raw:
@@ -299,6 +326,18 @@ def fetch_prematch_over25():
                     mejor_under = cuota
                     casa_under = BOOKMAKER_MAP.get(bookmaker_id, str(bookmaker_id))
 
+        # 👇 Si el fixture tiene Bet365, reemplazamos con scraping real
+        if any(o.get("bookmaker_id") == BET365_ID for o in odds_data.get("data", [])):
+            bet365_url = f"https://www.bet365.com/#/AC/B1/C1/D13/E{fixture_id}"  # ⚠️ Ajusta URL real
+            bet365_odds = scrape_bet365_over25(bet365_url)
+            if bet365_odds.get("over"):
+                mejor_over = bet365_odds["over"]
+                casa_over = "Bet365"
+            if bet365_odds.get("under"):
+                mejor_under = bet365_odds["under"]
+                casa_under = "Bet365"
+            logging.info(f"Cuotas Bet365 reemplazadas via scraping: {bet365_odds}")
+
         resultados.append({
             "evento": fixture_id,
             "local": normalize_text(local),
@@ -312,7 +351,7 @@ def fetch_prematch_over25():
             "latest_bookmaker_update": updated_str
         })
 
-        # 👇 ALERTA TELEGRAM si hay surebet
+        # ALERTA TELEGRAM si hay surebet
         if mejor_over and mejor_under:
             inv_sum = (1/mejor_over) + (1/mejor_under)
             if inv_sum < 1:
@@ -332,6 +371,7 @@ def fetch_prematch_over25():
                     logging.info(f"Alerta enviada por Telegram: {mensaje}")
 
     return resultados
+
 # ---------------------------------
 # INSERT DB: guarda mejores over/under, casas, surebet y stakes con BASE_STAKE
 # ---------------------------------
