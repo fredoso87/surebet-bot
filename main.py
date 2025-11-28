@@ -217,7 +217,7 @@ def fetch_prematch_over25():
             break
 
         all_fixtures.extend(data.get("data", []))
-        pagination = data.get("pagination", {})  # 👈 directo en raíz, no en meta
+        pagination = data.get("pagination", {})
         logging.info(f"✅ Fixtures acumulados tras page={page}: {len(all_fixtures)}")
 
         if not pagination or not pagination.get("has_more"):
@@ -229,12 +229,13 @@ def fetch_prematch_over25():
         fixture_id = fixture.get("id")
         participants = fixture.get("participants", [])
         if len(participants) < 2:
-            continue  # 👈 corregido el typo "continuex"
+            continue
 
         local = participants[0].get("name")
         visitante = participants[1].get("name")
         fecha_hora_raw = fixture.get("starting_at")
 
+        # ⏱ Ajuste de fecha +5h
         try:
             dt = datetime.fromisoformat(fecha_hora_raw.replace("Z", "+00:00"))
             dt_lima = dt.astimezone(LIMA_TZ)
@@ -242,6 +243,28 @@ def fetch_prematch_over25():
             fecha_hora_str = dt_lima_plus5.strftime("%d/%m/%Y %H:%M:%S")
         except Exception:
             fecha_hora_str = datetime.now(LIMA_TZ).strftime("%d/%m/%Y %H:%M:%S")
+
+        # ⏱ created_at +5h
+        created_raw = fixture.get("created_at")
+        created_str = None
+        if created_raw:
+            try:
+                dt_created = datetime.fromisoformat(created_raw.replace("Z", "+00:00"))
+                dt_created_plus5 = dt_created + timedelta(hours=5)
+                created_str = dt_created_plus5.strftime("%d/%m/%Y %H:%M:%S")
+            except Exception:
+                created_str = datetime.now(LIMA_TZ).strftime("%d/%m/%Y %H:%M:%S")
+
+        # ⏱ latest_bookmaker_update +5h
+        updated_raw = fixture.get("latest_bookmaker_update")
+        updated_str = None
+        if updated_raw:
+            try:
+                dt_updated = datetime.strptime(updated_raw, "%Y-%m-%d %H:%M:%S")
+                dt_updated_plus5 = dt_updated + timedelta(hours=5)
+                updated_str = dt_updated_plus5.strftime("%d/%m/%Y %H:%M:%S")
+            except Exception:
+                updated_str = datetime.now(LIMA_TZ).strftime("%d/%m/%Y %H:%M:%S")
 
         odds_data = sportmonks_request(f"/odds/pre-match/fixtures/{fixture_id}/markets/7")
 
@@ -282,9 +305,11 @@ def fetch_prematch_over25():
             "cuota_over": mejor_over,
             "casa_over": normalize_text(casa_over),
             "cuota_under": mejor_under,
-            "casa_under": normalize_text(casa_under)
+            "casa_under": normalize_text(casa_under),
+            "created_at": created_str,
+            "latest_bookmaker_update": updated_str
         })
-        
+
         # 👇 ALERTA TELEGRAM si hay surebet
         if mejor_over and mejor_under:
             inv_sum = (1/mejor_over) + (1/mejor_under)
@@ -322,15 +347,16 @@ def insert_matches(rows):
         profit_pct = None
 
         if cuota_over and cuota_under and valid_odds(cuota_over) and valid_odds(cuota_under):
-            implied_sum, s_over, s_under, p_abs, p_pct = compute_surebet_stakes(cuota_over, cuota_under, BASE_STAKE)
+            implied_sum, s_over, s_under, p_abs, p_pct = compute_surebet_stakes(
+                cuota_over, cuota_under, BASE_STAKE
+            )
             if implied_sum < 1.0:
                 surebet_flag = True
             stake_over = s_over
             stake_under = s_under
             profit_abs = p_abs
             profit_pct = p_pct
-        
-        
+
         q = """
         INSERT INTO matches (
             event_id, home_team, away_team, commence_time,
@@ -345,7 +371,10 @@ def insert_matches(rows):
             %s, %s,
             %s, %s,
             %s, %s, %s, %s, %s,
-            %s, %s, NOW(), NOW(), TRUE, FALSE
+            %s, %s,
+            to_timestamp(%s, 'DD/MM/YYYY HH24:MI:SS') AT TIME ZONE 'America/Lima',
+            to_timestamp(%s, 'DD/MM/YYYY HH24:MI:SS') AT TIME ZONE 'America/Lima',
+            TRUE, FALSE
         )
         ON CONFLICT (event_id, market, selection)
         DO UPDATE SET
@@ -358,7 +387,7 @@ def insert_matches(rows):
             stake_under = EXCLUDED.stake_under,
             profit_abs = EXCLUDED.profit_abs,
             profit_pct = EXCLUDED.profit_pct,
-            updated_at = NOW()
+            updated_at = EXCLUDED.updated_at
         RETURNING id
         """
 
@@ -366,7 +395,7 @@ def insert_matches(rows):
             row["evento"],
             row["local"],
             row["visitante"],
-            row["fecha_hora"],   # string dd/mm/yyyy HH24:MI:SS (Lima +5h)
+            row["fecha_hora"],   # string dd/mm/yyyy HH24:MI:SS (ya con +5h)
             row.get("cuota_over"),
             row.get("casa_over"),
             row.get("cuota_under"),
@@ -377,7 +406,9 @@ def insert_matches(rows):
             profit_abs,
             profit_pct,
             "over_under",
-            "over_2.5"
+            "over_2.5",
+            row.get("created_at"),             # string dd/mm/yyyy HH24:MI:SS (+5h)
+            row.get("latest_bookmaker_update") # string dd/mm/yyyy HH24:MI:SS (+5h)
         )
 
         try:
