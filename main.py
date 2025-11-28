@@ -233,8 +233,8 @@ def fetch_prematch_over25():
 
         local = participants[0].get("name")
         visitante = participants[1].get("name")
+        
         fecha_hora_raw = fixture.get("starting_at")
-
         # ⏱ Ajuste de fecha +5h
         try:
             dt = datetime.fromisoformat(fecha_hora_raw.replace("Z", "+00:00"))
@@ -247,24 +247,20 @@ def fetch_prematch_over25():
         # ⏱ created_at +5h con fallback
         created_raw = fixture.get("created_at")
         try:
-            if created_raw:
-                dt_created = datetime.fromisoformat(created_raw.replace("Z", "+00:00"))
-                dt_created_plus5 = dt_created + timedelta(hours=5)
-                created_str = dt_created_plus5.strftime("%d/%m/%Y %H:%M:%S")
-            else:
-                created_str = (datetime.now(LIMA_TZ) + timedelta(hours=5)).strftime("%d/%m/%Y %H:%M:%S")
+            dt = datetime.fromisoformat(created_raw.replace("Z", "+00:00"))
+            dt_lima = dt.astimezone(LIMA_TZ)
+            dt_lima_plus5 = dt_lima + timedelta(hours=5)
+            created_str = dt_lima_plus5.strftime("%d/%m/%Y %H:%M:%S")
         except Exception:
             created_str = (datetime.now(LIMA_TZ) + timedelta(hours=5)).strftime("%d/%m/%Y %H:%M:%S")
 
         # ⏱ latest_bookmaker_update +5h con fallback
         updated_raw = fixture.get("latest_bookmaker_update")
         try:
-            if updated_raw:
-                dt_updated = datetime.strptime(updated_raw, "%Y-%m-%d %H:%M:%S")
-                dt_updated_plus5 = dt_updated + timedelta(hours=5)
-                updated_str = dt_updated_plus5.strftime("%d/%m/%Y %H:%M:%S")
-            else:
-                updated_str = (datetime.now(LIMA_TZ) + timedelta(hours=5)).strftime("%d/%m/%Y %H:%M:%S")
+            dt = datetime.fromisoformat(updated_raw.replace("Z", "+00:00"))
+            dt_lima = dt.astimezone(LIMA_TZ)
+            dt_lima_plus5 = dt_lima + timedelta(hours=5)
+            updated_str = dt_lima_plus5.strftime("%d/%m/%Y %H:%M:%S")
         except Exception:
             updated_str = (datetime.now(LIMA_TZ) + timedelta(hours=5)).strftime("%d/%m/%Y %H:%M:%S")
 
