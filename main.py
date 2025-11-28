@@ -587,12 +587,14 @@ def run_cycle_prematch(tag):
 def main():
     logging.info("Script iniciado (Sportmonks v3 football).")
         
-    last_prematch = time.time()
-    last_monitor = time.time()
+    # Inicializa en el pasado para que se ejecuten en la primera vuelta
+    last_prematch = time.time() - 900
+    last_monitor = time.time() - 120
     
     while True:
         now = datetime.now(LIMA_TZ)
-        # Cada 15 minutos (900 segundos)
+        
+        # Cada 15 minutos
         if time.time() - last_prematch >= 900:
             try:
                 run_cycle_prematch("CADA_15_MIN")
@@ -601,7 +603,7 @@ def main():
                 logging.error(f"Error en inserción periódica: {e}")
             last_prematch = time.time()
 
-        # Cada 2 minutos (120 segundos)
+        # Cada 2 minutos
         if time.time() - last_monitor >= 120:
             try:
                 monitor_live_and_notify()
@@ -612,6 +614,7 @@ def main():
             last_monitor = time.time()
 
         time.sleep(POLL_SECONDS)
+
 
 # ---------------------------------
 # FLASK (Render Web Service)
