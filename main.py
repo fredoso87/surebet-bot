@@ -242,29 +242,31 @@ def fetch_prematch_over25():
             dt_lima_plus5 = dt_lima + timedelta(hours=5)
             fecha_hora_str = dt_lima_plus5.strftime("%d/%m/%Y %H:%M:%S")
         except Exception:
-            fecha_hora_str = datetime.now(LIMA_TZ).strftime("%d/%m/%Y %H:%M:%S")
+            fecha_hora_str = (datetime.now(LIMA_TZ) + timedelta(hours=5)).strftime("%d/%m/%Y %H:%M:%S")
 
-        # ⏱ created_at +5h
+        # ⏱ created_at +5h con fallback
         created_raw = fixture.get("created_at")
-        created_str = None
-        if created_raw:
-            try:
+        try:
+            if created_raw:
                 dt_created = datetime.fromisoformat(created_raw.replace("Z", "+00:00"))
                 dt_created_plus5 = dt_created + timedelta(hours=5)
                 created_str = dt_created_plus5.strftime("%d/%m/%Y %H:%M:%S")
-            except Exception:
-                created_str = datetime.now(LIMA_TZ).strftime("%d/%m/%Y %H:%M:%S")
+            else:
+                created_str = (datetime.now(LIMA_TZ) + timedelta(hours=5)).strftime("%d/%m/%Y %H:%M:%S")
+        except Exception:
+            created_str = (datetime.now(LIMA_TZ) + timedelta(hours=5)).strftime("%d/%m/%Y %H:%M:%S")
 
-        # ⏱ latest_bookmaker_update +5h
+        # ⏱ latest_bookmaker_update +5h con fallback
         updated_raw = fixture.get("latest_bookmaker_update")
-        updated_str = None
-        if updated_raw:
-            try:
+        try:
+            if updated_raw:
                 dt_updated = datetime.strptime(updated_raw, "%Y-%m-%d %H:%M:%S")
                 dt_updated_plus5 = dt_updated + timedelta(hours=5)
                 updated_str = dt_updated_plus5.strftime("%d/%m/%Y %H:%M:%S")
-            except Exception:
-                updated_str = datetime.now(LIMA_TZ).strftime("%d/%m/%Y %H:%M:%S")
+            else:
+                updated_str = (datetime.now(LIMA_TZ) + timedelta(hours=5)).strftime("%d/%m/%Y %H:%M:%S")
+        except Exception:
+            updated_str = (datetime.now(LIMA_TZ) + timedelta(hours=5)).strftime("%d/%m/%Y %H:%M:%S")
 
         odds_data = sportmonks_request(f"/odds/pre-match/fixtures/{fixture_id}/markets/7")
 
@@ -330,7 +332,6 @@ def fetch_prematch_over25():
                     logging.info(f"Alerta enviada por Telegram: {mensaje}")
 
     return resultados
-
 # ---------------------------------
 # INSERT DB: guarda mejores over/under, casas, surebet y stakes con BASE_STAKE
 # ---------------------------------
