@@ -355,6 +355,11 @@ def insert_matches(rows):
         profit_abs = None
         profit_pct = None
 
+        # nuevos campos
+        umbral_surebet = None
+        cobertura_stake = None
+        cobertura_resultado = None
+
         if cuota_over and cuota_under and valid_odds(cuota_over) and valid_odds(cuota_under):
             implied_sum, s_over, s_under, p_abs, p_pct = compute_surebet_stakes(
                 cuota_over, cuota_under, BASE_STAKE
@@ -366,12 +371,21 @@ def insert_matches(rows):
             profit_abs = p_abs
             profit_pct = p_pct
 
+            # cálculo de umbral y cobertura
+            try:
+                umbral_surebet = cuota_over / (cuota_over - 1)
+                cobertura_stake = (100 * cuota_over) / cuota_under
+                cobertura_resultado = 100 * (cuota_over - 1) - cobertura_stake
+            except Exception as e:
+                logging.error(f"Error calculando umbral/cobertura: {e}")
+
         q = """
         INSERT INTO matches (
             event_id, home_team, away_team, commence_time,
             odds_over, bookmaker_over,
             odds_under, bookmaker_under,
             surebet, stake_over, stake_under, profit_abs, profit_pct,
+            umbral_surebet, cobertura_stake, cobertura_resultado,
             market, selection, created_at, updated_at, bet_placed, track_live
         )
         VALUES (
@@ -380,6 +394,7 @@ def insert_matches(rows):
             %s, %s,
             %s, %s,
             %s, %s, %s, %s, %s,
+            %s, %s, %s,
             %s, %s,
             to_timestamp(%s, 'DD/MM/YYYY HH24:MI:SS') AT TIME ZONE 'America/Lima',
             to_timestamp(%s, 'DD/MM/YYYY HH24:MI:SS') AT TIME ZONE 'America/Lima',
@@ -396,6 +411,9 @@ def insert_matches(rows):
             stake_under = EXCLUDED.stake_under,
             profit_abs = EXCLUDED.profit_abs,
             profit_pct = EXCLUDED.profit_pct,
+            umbral_surebet = EXCLUDED.umbral_surebet,
+            cobertura_stake = EXCLUDED.cobertura_stake,
+            cobertura_resultado = EXCLUDED.cobertura_resultado,
             updated_at = EXCLUDED.updated_at
         RETURNING id
         """
@@ -404,7 +422,7 @@ def insert_matches(rows):
             row["evento"],
             row["local"],
             row["visitante"],
-            row["fecha_hora"],   # string dd/mm/yyyy HH24:MI:SS (ya con +5h)
+            row["fecha_hora"],
             row.get("cuota_over"),
             row.get("casa_over"),
             row.get("cuota_under"),
@@ -414,10 +432,13 @@ def insert_matches(rows):
             stake_under,
             profit_abs,
             profit_pct,
+            umbral_surebet,
+            cobertura_stake,
+            cobertura_resultado,
             "over_under",
             "over_2.5",
-            row.get("created_at"),             # string dd/mm/yyyy HH24:MI:SS (+5h)
-            row.get("latest_bookmaker_update") # string dd/mm/yyyy HH24:MI:SS (+5h)
+            row.get("created_at"),
+            row.get("latest_bookmaker_update")
         )
 
         try:
