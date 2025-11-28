@@ -179,21 +179,35 @@ def valid_odds(odds):
 # ---------------------------------
 def compute_surebet_stakes(odds_over, odds_under, stake_total):
     try:
+        # Validaciones iniciales
+        if not odds_over or not odds_under:
+            return 999.0, 0.0, 0.0, 0.0, 0.0
+        if float(odds_over) <= 1.0 or float(odds_under) <= 1.0:
+            # cuotas inválidas (no pueden ser <=1)
+            return 999.0, 0.0, 0.0, 0.0, 0.0
+
         inv_over = 1.0 / float(odds_over)
         inv_under = 1.0 / float(odds_under)
         implied_sum = inv_over + inv_under
+
         if implied_sum <= 0:
             return 999.0, 0.0, 0.0, 0.0, 0.0
+
         stake_over = stake_total * (inv_over / implied_sum)
         stake_under = stake_total * (inv_under / implied_sum)
+
         payout_over = stake_over * float(odds_over)
         payout_under = stake_under * float(odds_under)
+
         profit_abs = min(payout_over, payout_under) - stake_total
         profit_pct = profit_abs / stake_total if stake_total > 0 else 0.0
+
         return implied_sum, stake_over, stake_under, profit_abs, profit_pct
+
     except Exception as e:
         logging.error(f"Error compute_surebet_stakes: {e}")
         return 999.0, 0.0, 0.0, 0.0, 0.0
+
 
 # ---------------------------------
 # PREMATCH: mejores Over/Under 2.5 (marketId=7) + surebet prematch
@@ -208,7 +222,7 @@ def fetch_prematch_over25():
     while True:
         try:
             url = f"{base_url}?api_token={SPORTMONKS_TOKEN}&page={page}&include=participants"
-            logging.info(f"URL de la API pre-match={url}")
+            #logging.info(f"URL de la API pre-match={url}")
             r = requests.get(url, timeout=20)
             r.raise_for_status()
             data = r.json()
