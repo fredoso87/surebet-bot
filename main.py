@@ -130,7 +130,7 @@ def scrape_bet365_over25(match_url):
         logging.info(f"[SCRAPER] Abriendo URL: {match_url}")
         driver.get(match_url)
 
-        # Paso 1: esperar que cargue la página
+        # Paso 1: esperar que cargue el <body>
         try:
             WebDriverWait(driver, 10).until(
                 EC.presence_of_element_located((By.TAG_NAME, "body"))
@@ -140,17 +140,21 @@ def scrape_bet365_over25(match_url):
             logging.error(f"[SCRAPER] Error esperando <body>: {e}")
             return {}
 
-        # Paso 2: buscar todos los elementos de cuotas por clase
+        # Paso 2: dump parcial del HTML para inspección
+        html_dump = driver.page_source[:2000]  # primeros 2000 caracteres
+        logging.info(f"[SCRAPER] Dump parcial del HTML:\n{html_dump}")
+
+        # Paso 3: buscar elementos de cuotas genéricos
         try:
             odds_elements = WebDriverWait(driver, 15).until(
-                EC.presence_of_all_elements_located((By.CLASS_NAME, "gl-ParticipantOddsOnly_Odds"))
+                EC.presence_of_all_elements_located((By.XPATH, "//span[contains(@class,'Odds')]"))
             )
-            logging.info(f"[SCRAPER] Encontrados {len(odds_elements)} elementos de cuotas.")
+            logging.info(f"[SCRAPER] Encontrados {len(odds_elements)} elementos con 'Odds' en la clase.")
         except Exception as e:
             logging.error(f"[SCRAPER] Error buscando elementos de cuotas: {e}")
             return {}
 
-        # Paso 3: listar todas las cuotas visibles
+        # Paso 4: listar todas las cuotas visibles
         try:
             cuotas = [el.text for el in odds_elements if el.text.strip()]
             logging.info(f"[SCRAPER] Cuotas visibles: {cuotas}")
@@ -158,19 +162,12 @@ def scrape_bet365_over25(match_url):
             logging.error(f"[SCRAPER] Error extrayendo texto de cuotas: {e}")
             return {}
 
-        # Paso 4: intentar identificar Over/Under 2.5
-        try:
-            if len(cuotas) >= 2:
-                cuota_over = float(cuotas[0])
-                cuota_under = float(cuotas[1])
-                logging.info(f"[SCRAPER] Over 2.5={cuota_over}, Under 2.5={cuota_under}")
-                return {"over": cuota_over, "under": cuota_under}
-            else:
-                logging.warning("[SCRAPER] No hay suficientes cuotas para Over/Under 2.5.")
-                return {"all_odds": cuotas}
-        except Exception as e:
-            logging.error(f"[SCRAPER] Error convirtiendo cuotas a float: {e}")
+        # Paso 5: devolver todas las cuotas para inspección
+        if cuotas:
             return {"all_odds": cuotas}
+        else:
+            logging.warning("[SCRAPER] No se encontraron cuotas visibles.")
+            return {}
 
     except Exception as e:
         logging.error(f"[SCRAPER] Error general: {e}")
@@ -178,6 +175,7 @@ def scrape_bet365_over25(match_url):
     finally:
         driver.quit()
         logging.info("[SCRAPER] Navegador cerrado.")
+
 
 # ---------------------------------
 # DB
