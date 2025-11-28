@@ -12,6 +12,8 @@ import threading
 import os
 import pytz
 import unicodedata
+import schedule
+
 from urllib.parse import urlparse, parse_qs
 # ---------------------------------
 # CONFIG
@@ -96,7 +98,7 @@ def load_bookmakers_map():
                      f"has_more={pagination.get('has_more')} next_page={pagination.get('next_page')}")
 
         all_bookmakers.extend(data)
-        logging.info(f"✅ Bookmakers acumulados tras page={page}: {len(all_bookmakers)}")
+        #logging.info(f"✅ Bookmakers acumulados tras page={page}: {len(all_bookmakers)}")
 
         # Condición de corte
         if not pagination or not pagination.get("has_more"):
@@ -522,8 +524,24 @@ def monitor_live_and_notify():
 
     for ev in live_events:
         fixture_id = ev["event_id"]
-        under_live = float(ev["cuota_under25"])
-        bookmaker_live_name = ev["bookmaker_name"]
+        under_live = float(ev.get("cuota_under25") or 0)
+        bookmaker_live_name = ev.get("bookmaker_name") or ""
+        match_status = ev.get("status") or ""   # 👈 debe venir del feed live
+        match_minute = int(ev.get("minute") or 0)
+
+        # 👇 Ignorar partidos finalizados
+        if match_status.upper() in {"FT", "FINISHED", "ENDED"}:
+            logging.info(f"Partido {fixture_id} ya finalizado, se desactiva track_live.")
+            try:
+                db_exec("UPDATE matches SET track_live=FALSE WHERE event_id=%s", (fixture_id,))
+            except Exception as e:
+                logging.error(f"Error desactivando track_live: {e}")
+            continue
+
+        # 👇 Ignorar partidos después del minuto 20
+        if match_minute > 20:
+            logging.info(f"Partido {fixture_id} minuto {match_minute}, se deja de monitorear.")
+            continue
 
         pm = prematch_index.get(fixture_id)
         if not pm:
@@ -538,9 +556,14 @@ def monitor_live_and_notify():
             over_odds_prematch, under_live, BASE_STAKE
         )
 
+        # 👇 Calcular umbral de surebet
+        umbral_surebet = None
+        if over_odds_prematch > 1:
+            umbral_surebet = over_odds_prematch / (over_odds_prematch - 1)
+
         if implied_sum < 1.0:
             msg = (
-                f"🔥 Surebet LIVE {home} vs {away}.\n"
+                f"🔥 Surebet LIVE {home} vs {away} (min {match_minute}).\n"
                 f"Over 2.5 pre @ {over_odds_prematch} | Under 2.5 live @ {under_live} ({bookmaker_live_name}).\n"
                 f"Stake base {BASE_STAKE:.2f} {CURRENCY} ⇒ Over: {s_over:.2f}, Under: {s_under:.2f}.\n"
                 f"Profit esperado: {profit_abs:.2f} {CURRENCY} ({profit_pct*100:.2f}%)."
@@ -555,11 +578,12 @@ def monitor_live_and_notify():
                 logging.error(f"Error insert alert surebet_live: {e}")
         else:
             msg = (
-                f"ℹ️ Sin surebet LIVE {home} vs {away}. Under 2.5 @ {under_live} ({bookmaker_live_name}). "
-                f"Suma inversas: {implied_sum:.4f}."
+                f"ℹ️ Sin surebet LIVE {home} vs {away} (min {match_minute}).\n"
+                f"Over 2.5 pre @ {over_odds_prematch} | Under 2.5 live @ {under_live} ({bookmaker_live_name}).\n"
+                f"Suma inversas: {implied_sum:.4f}. "
+                f"Umbral de surebet (Under mínimo): {umbral_surebet:.2f}."
             )
             send_telegram(msg)
-
 # ---------------------------------
 # CICLO PRINCIPAL
 # ---------------------------------
@@ -584,42 +608,28 @@ def run_cycle_prematch(tag):
     logging.info(f"[{tag}] Prematch Over/Under 2.5 procesados: {len(ids)}")
     send_telegram(f"[{tag}] Prematch Over/Under 2.5 en DB: {len(ids)}")
 
+def job_prematch():
+    now = datetime.now(LIMA_TZ)
+    now_plus5 = now + timedelta(hours=5)  # 👈 sumamos 5 horas
+    run_cycle_prematch("CADA_15_MIN")
+    logging.info(f"[PREMATCH] Ejecutado ciclo prematch a las {now_plus5.strftime('%d/%m/%Y %H:%M:%S')}")
+
+def job_monitor():
+    now = datetime.now(LIMA_TZ)
+    now_plus5 = now + timedelta(hours=5)  # 👈 sumamos 5 horas
+    monitor_live_and_notify()
+    heartbeat()
+    logging.info(f"[MONITOR] Ejecutado monitoreo a las {now_plus5.strftime('%d/%m/%Y %H:%M:%S')}")
+
 def main():
     logging.info("Script iniciado (Sportmonks v3 football).")
 
-    # Inicializa en el pasado para que se ejecute en la primera vuelta
-    last_prematch = time.time() - 900
-    last_monitor = time.time() - 120
+    schedule.every(15).minutes.do(job_prematch)
+    schedule.every(2).minutes.do(job_monitor)
 
     while True:
-        now = datetime.now(LIMA_TZ)
-
-        # Diferencia en segundos desde última ejecución
-        diff_prematch = time.time() - last_prematch
-        diff_monitor = time.time() - last_monitor
-
-        # Cada 15 minutos
-        if diff_prematch >= 900:
-            try:
-                run_cycle_prematch("CADA_15_MIN")
-                logging.info(f"[PREMATCH] Ejecutado ciclo prematch a las {now.strftime('%d/%m/%Y %H:%M:%S')} "
-                             f"(diff={diff_prematch:.2f}s)")
-            except Exception as e:
-                logging.error(f"Error en inserción periódica: {e}")
-            last_prematch = time.time()
-
-        # Cada 2 minutos
-        if diff_monitor >= 120:
-            try:
-                monitor_live_and_notify()
-                heartbeat()
-                logging.info(f"[MONITOR] Ejecutado monitoreo a las {now.strftime('%d/%m/%Y %H:%M:%S')} "
-                             f"(diff={diff_monitor:.2f}s)")
-            except Exception as e:
-                logging.error(f"Error en monitoreo: {e}")
-            last_monitor = time.time()
-
-        time.sleep(POLL_SECONDS)
+        schedule.run_pending()
+        time.sleep(1)
 
 # ---------------------------------
 # FLASK (Render Web Service)
