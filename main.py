@@ -13,11 +13,6 @@ import os
 import pytz
 import unicodedata
 from urllib.parse import urlparse, parse_qs
-from selenium import webdriver
-from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
-
 # ---------------------------------
 # CONFIG
 # ---------------------------------
@@ -38,7 +33,6 @@ POLL_SECONDS = 300
 BASE_STAKE = 100.0
 MAX_STAKE = 500.0
 CURRENCY = "USD"
-BET365_ID = 2  # Sportmonks devuelve Bet365 con id=2
 
 LIMA_TZ = pytz.timezone("America/Lima")
 
@@ -51,6 +45,9 @@ logging.basicConfig(
     ]
 )
 
+# ---------------------------------
+# UTILIDAD: imprimir todas las casas de apuesta
+# ---------------------------------
 # ---------------------------------
 # UTILIDAD: imprimir todas las casas de apuesta
 # ---------------------------------
@@ -94,12 +91,12 @@ def load_bookmakers_map():
         data = payload.get("data", [])
         pagination = payload.get("pagination", {})  # 👈 directo en raíz, no en meta
 
-        #logging.info(f"📄 Respuesta API page={page}: count={pagination.get('count')} "
-        #             f"per_page={pagination.get('per_page')} current_page={pagination.get('current_page')} "
-        #             f"has_more={pagination.get('has_more')} next_page={pagination.get('next_page')}")
+        logging.info(f"📄 Respuesta API page={page}: count={pagination.get('count')} "
+                     f"per_page={pagination.get('per_page')} current_page={pagination.get('current_page')} "
+                     f"has_more={pagination.get('has_more')} next_page={pagination.get('next_page')}")
 
         all_bookmakers.extend(data)
-        #logging.info(f"✅ Bookmakers acumulados tras page={page}: {len(all_bookmakers)}")
+        logging.info(f"✅ Bookmakers acumulados tras page={page}: {len(all_bookmakers)}")
 
         # Condición de corte
         if not pagination or not pagination.get("has_more"):
@@ -120,62 +117,6 @@ def load_bookmakers_map():
     
 BOOKMAKER_MAP = load_bookmakers_map()
 BOOKMAKER_IDS = [212,127,152,83,84,28,26,24,16,9,2,8,35,18,20,21,123,91,216,215,1,5,24,22,33,35,39]
-
-def scrape_bet365_over25(match_url):
-    options = webdriver.ChromeOptions()
-    options.add_argument("--headless")
-    driver = webdriver.Chrome(options=options)
-
-    try:
-        logging.info(f"[SCRAPER] Abriendo URL: {match_url}")
-        driver.get(match_url)
-
-        # Paso 1: esperar que cargue el <body>
-        try:
-            WebDriverWait(driver, 10).until(
-                EC.presence_of_element_located((By.TAG_NAME, "body"))
-            )
-            logging.info("[SCRAPER] Página cargada correctamente.")
-        except Exception as e:
-            logging.error(f"[SCRAPER] Error esperando <body>: {e}")
-            return {}
-
-        # Paso 2: dump parcial del HTML para inspección
-        html_dump = driver.page_source[:2000]  # primeros 2000 caracteres
-        logging.info(f"[SCRAPER] Dump parcial del HTML:\n{html_dump}")
-
-        # Paso 3: buscar elementos de cuotas genéricos
-        try:
-            odds_elements = WebDriverWait(driver, 15).until(
-                EC.presence_of_all_elements_located((By.XPATH, "//span[contains(@class,'Odds')]"))
-            )
-            logging.info(f"[SCRAPER] Encontrados {len(odds_elements)} elementos con 'Odds' en la clase.")
-        except Exception as e:
-            logging.error(f"[SCRAPER] Error buscando elementos de cuotas: {e}")
-            return {}
-
-        # Paso 4: listar todas las cuotas visibles
-        try:
-            cuotas = [el.text for el in odds_elements if el.text.strip()]
-            logging.info(f"[SCRAPER] Cuotas visibles: {cuotas}")
-        except Exception as e:
-            logging.error(f"[SCRAPER] Error extrayendo texto de cuotas: {e}")
-            return {}
-
-        # Paso 5: devolver todas las cuotas para inspección
-        if cuotas:
-            return {"all_odds": cuotas}
-        else:
-            logging.warning("[SCRAPER] No se encontraron cuotas visibles.")
-            return {}
-
-    except Exception as e:
-        logging.error(f"[SCRAPER] Error general: {e}")
-        return {}
-    finally:
-        driver.quit()
-        logging.info("[SCRAPER] Navegador cerrado.")
-
 
 # ---------------------------------
 # DB
@@ -257,7 +198,6 @@ def compute_surebet_stakes(odds_over, odds_under, stake_total):
 # ---------------------------------
 # PREMATCH: mejores Over/Under 2.5 (marketId=7) + surebet prematch
 # ---------------------------------
-
 def fetch_prematch_over25():
     hoy = datetime.now(LIMA_TZ).date()
     manana = hoy + timedelta(days=3)
@@ -295,7 +235,7 @@ def fetch_prematch_over25():
         visitante = participants[1].get("name")
         fecha_hora_raw = fixture.get("starting_at")
 
-        # Ajuste de fecha +5h
+        # ⏱ Ajuste de fecha +5h
         try:
             dt = datetime.fromisoformat(fecha_hora_raw.replace("Z", "+00:00"))
             dt_lima = dt.astimezone(LIMA_TZ)
@@ -304,7 +244,7 @@ def fetch_prematch_over25():
         except Exception:
             fecha_hora_str = (datetime.now(LIMA_TZ) + timedelta(hours=5)).strftime("%d/%m/%Y %H:%M:%S")
 
-        # created_at y updated_at con fallback
+        # ⏱ created_at +5h con fallback
         created_raw = fixture.get("created_at")
         try:
             if created_raw:
@@ -316,6 +256,7 @@ def fetch_prematch_over25():
         except Exception:
             created_str = (datetime.now(LIMA_TZ) + timedelta(hours=5)).strftime("%d/%m/%Y %H:%M:%S")
 
+        # ⏱ latest_bookmaker_update +5h con fallback
         updated_raw = fixture.get("latest_bookmaker_update")
         try:
             if updated_raw:
@@ -358,19 +299,6 @@ def fetch_prematch_over25():
                     mejor_under = cuota
                     casa_under = BOOKMAKER_MAP.get(bookmaker_id, str(bookmaker_id))
 
-        # 👇 Si el fixture tiene Bet365, reemplazamos con scraping real
-        if any(o.get("bookmaker_id") == 2 for o in odds_data.get("data", [])):
-            bet365_url = f"https://www.bet365.com/#/AC/B1/C1/D13/E{fixture_id}"  # ⚠️ Ajusta URL real
-            bet365_odds = scrape_bet365_over25(bet365_url)
-            logging.info(f"DEBUG Bet365 - Resultado scraper: {bet365_odds}")
-            if bet365_odds.get("over"):
-                mejor_over = bet365_odds["over"]
-                casa_over = "Bet365"
-            if bet365_odds.get("under"):
-                mejor_under = bet365_odds["under"]
-                casa_under = "Bet365"
-            logging.info(f"Cuotas Bet365 reemplazadas via scraping: {bet365_odds}")
-
         resultados.append({
             "evento": fixture_id,
             "local": normalize_text(local),
@@ -384,7 +312,7 @@ def fetch_prematch_over25():
             "latest_bookmaker_update": updated_str
         })
 
-        # ALERTA TELEGRAM si hay surebet
+        # 👇 ALERTA TELEGRAM si hay surebet
         if mejor_over and mejor_under:
             inv_sum = (1/mejor_over) + (1/mejor_under)
             if inv_sum < 1:
@@ -404,7 +332,6 @@ def fetch_prematch_over25():
                     logging.info(f"Alerta enviada por Telegram: {mensaje}")
 
     return resultados
-
 # ---------------------------------
 # INSERT DB: guarda mejores over/under, casas, surebet y stakes con BASE_STAKE
 # ---------------------------------
@@ -613,6 +540,7 @@ def run_cycle_prematch(tag):
         logging.error(f"Error insert prematch: {e}")
     logging.info(f"[{tag}] Prematch Over/Under 2.5 procesados: {len(ids)}")
     send_telegram(f"[{tag}] Prematch Over/Under 2.5 en DB: {len(ids)}")
+
 
 def main():
     logging.info("Script iniciado (Sportmonks v3 football).")
