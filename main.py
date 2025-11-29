@@ -93,9 +93,9 @@ def load_bookmakers_map():
         data = payload.get("data", [])
         pagination = payload.get("pagination", {})  # 👈 directo en raíz, no en meta
 
-        logging.info(f"📄 Respuesta API page={page}: count={pagination.get('count')} "
-                     f"per_page={pagination.get('per_page')} current_page={pagination.get('current_page')} "
-                     f"has_more={pagination.get('has_more')} next_page={pagination.get('next_page')}")
+        #logging.info(f"📄 Respuesta API page={page}: count={pagination.get('count')} "
+        #             f"per_page={pagination.get('per_page')} current_page={pagination.get('current_page')} "
+        #             f"has_more={pagination.get('has_more')} next_page={pagination.get('next_page')}")
 
         all_bookmakers.extend(data)
         #logging.info(f"✅ Bookmakers acumulados tras page={page}: {len(all_bookmakers)}")
@@ -502,7 +502,7 @@ def fetch_fixture_details(fixture_id):
     Consulta el estado y minuto actual de un fixture en Sportmonks.
     Devuelve (state_id, match_minute).
     """
-    fixture_data = sportmonks_request(f"/football/fixtures/{fixture_id}", params={"include": "periods"})
+    fixture_data = sportmonks_request(f"/fixtures/{fixture_id}", params={"include": "periods"})
     data = fixture_data.get("data", {})
 
     # Estado del partido
