@@ -497,9 +497,29 @@ def fetch_live_under25(fixtures_ids):
                     })
     return eventos
 
-# ---------------------------------
-# MONITOREO LIVE + NOTIFY (usa track_live=TRUE en matches)
-# ---------------------------------
+def fetch_fixture_details(fixture_id):
+    """
+    Consulta el estado y minuto actual de un fixture en Sportmonks.
+    Devuelve (state_id, match_minute).
+    """
+    fixture_data = sportmonks_request(f"/football/fixtures/{fixture_id}", params={"include": "periods"})
+    data = fixture_data.get("data", {})
+
+    # Estado del partido
+    state_id = data.get("state_id")
+
+    # Minuto actual: tomamos el último periodo disponible
+    match_minute = 0
+    periods = data.get("periods", [])
+    if periods:
+        try:
+            match_minute = int(periods[-1].get("minutes", 0))
+        except Exception:
+            match_minute = 0
+
+    return state_id, match_minute
+
+
 def monitor_live_and_notify():
     rows = db_exec("""
         SELECT id, event_id, home_team, away_team, odds_over, odds_under, stake_over, stake_under
@@ -526,12 +546,13 @@ def monitor_live_and_notify():
         fixture_id = ev["event_id"]
         under_live = float(ev.get("cuota_under25") or 0)
         bookmaker_live_name = ev.get("bookmaker_name") or ""
-        match_status = ev.get("status") or ""   # 👈 debe venir del feed live
-        match_minute = int(ev.get("minute") or 0)
 
-        # 👇 Ignorar partidos finalizados
-        if match_status.upper() in {"FT", "FINISHED", "ENDED"}:
-            logging.info(f"Partido {fixture_id} ya finalizado, se desactiva track_live.")
+        # 👇 Consultamos estado y minuto desde la API de fixtures
+        state_id, match_minute = fetch_fixture_details(fixture_id)
+
+        # 👇 Ignorar partidos desde state_id 3 hasta 13
+        if state_id is not None and 3 <= state_id <= 13:
+            logging.info(f"Partido {fixture_id} con state_id={state_id}, se desactiva track_live.")
             try:
                 db_exec("UPDATE matches SET track_live=FALSE WHERE event_id=%s", (fixture_id,))
             except Exception as e:
@@ -559,7 +580,10 @@ def monitor_live_and_notify():
         # 👇 Calcular umbral de surebet
         umbral_surebet = None
         if over_odds_prematch > 1:
-            umbral_surebet = over_odds_prematch / (over_odds_prematch - 1)
+            try:
+                umbral_surebet = over_odds_prematch / (over_odds_prematch - 1)
+            except ZeroDivisionError:
+                umbral_surebet = None
 
         if implied_sum < 1.0:
             msg = (
@@ -577,14 +601,22 @@ def monitor_live_and_notify():
             except Exception as e:
                 logging.error(f"Error insert alert surebet_live: {e}")
         else:
-            msg = (
-                f"ℹ️ Sin surebet LIVE {home} vs {away} (min {match_minute}).\n"
-                f"Over 2.5 pre @ {over_odds_prematch} | Under 2.5 live @ {under_live} ({bookmaker_live_name}).\n"
-                f"Suma inversas: {implied_sum:.4f}. "
-                f"Umbral de surebet (Under mínimo): {umbral_surebet:.2f}."
-            )
+            if umbral_surebet is not None:
+                msg = (
+                    f"ℹ️ Sin surebet LIVE {home} vs {away} (min {match_minute}).\n"
+                    f"Over 2.5 pre @ {over_odds_prematch} | Under 2.5 live @ {under_live} ({bookmaker_live_name}).\n"
+                    f"Suma inversas: {implied_sum:.4f}. "
+                    f"Umbral de surebet (Under mínimo): {umbral_surebet:.2f}."
+                )
+            else:
+                msg = (
+                    f"ℹ️ Sin surebet LIVE {home} vs {away} (min {match_minute}).\n"
+                    f"Over 2.5 pre @ {over_odds_prematch} | Under 2.5 live @ {under_live} ({bookmaker_live_name}).\n"
+                    f"Suma inversas: {implied_sum:.4f}. "
+                    f"Umbral de surebet no disponible (cuota inválida)."
+                )
             send_telegram(msg)
-# ---------------------------------
+
 # CICLO PRINCIPAL
 # ---------------------------------
 _last_heartbeat = None
