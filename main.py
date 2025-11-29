@@ -502,13 +502,12 @@ def fetch_fixture_details(fixture_id):
     Consulta el estado y minuto actual de un fixture en Sportmonks.
     Devuelve (state_id, match_minute).
     """
+    # 👇 Ojo: aquí NO ponemos /football porque SPORTMONKS_BASE ya lo incluye
     fixture_data = sportmonks_request(f"/fixtures/{fixture_id}", params={"include": "periods"})
     data = fixture_data.get("data", {})
 
-    # Estado del partido
     state_id = data.get("state_id")
 
-    # Minuto actual: tomamos el último periodo disponible
     match_minute = 0
     periods = data.get("periods", [])
     if periods:
@@ -518,6 +517,7 @@ def fetch_fixture_details(fixture_id):
             match_minute = 0
 
     return state_id, match_minute
+
 
 
 def monitor_live_and_notify():
