@@ -13,7 +13,7 @@ import os
 import pytz
 import unicodedata
 import schedule
-
+import threading
 from urllib.parse import urlparse, parse_qs
 # ---------------------------------
 # CONFIG
@@ -115,9 +115,7 @@ def load_bookmakers_map():
 
     logging.info(f"🎯 Bookmakers cargados: {len(bookmaker_map)} casas de apuesta (total crudo: {len(all_bookmakers)})")
     return bookmaker_map
-
     
-BOOKMAKER_MAP = load_bookmakers_map()
 BOOKMAKER_IDS = [212,127,152,83,84,28,26,24,16,9,2,8,35,18,20,21,123,91,216,215,1,5,24,22,33,35,39]
 
 # ---------------------------------
@@ -220,7 +218,7 @@ def fetch_prematch_over25():
     base_url = f"{SPORTMONKS_BASE}/fixtures/between/{hoy.isoformat()}/{manana.isoformat()}"
     page = 1
     all_fixtures = []
-
+    BOOKMAKER_MAP = load_bookmakers_map()
     while True:
         try:
             url = f"{base_url}?api_token={SPORTMONKS_TOKEN}&page={page}&include=participants"
@@ -642,22 +640,30 @@ def run_cycle_prematch(tag):
 
 def job_prematch():
     now = datetime.now(LIMA_TZ)
-    now_plus5 = now + timedelta(hours=5)  # 👈 sumamos 5 horas
+    now_plus5 = now + timedelta(hours=5)
+    logging.info(f"[PREMATCH] Disparado job_prematch a las {now_plus5.strftime('%d/%m/%Y %H:%M:%S')}")
     run_cycle_prematch("CADA_15_MIN")
     logging.info(f"[PREMATCH] Ejecutado ciclo prematch a las {now_plus5.strftime('%d/%m/%Y %H:%M:%S')}")
 
 def job_monitor():
     now = datetime.now(LIMA_TZ)
-    now_plus5 = now + timedelta(hours=5)  # 👈 sumamos 5 horas
+    now_plus5 = now + timedelta(hours=5)
+    logging.info(f"[MONITOR] Disparado job_monitor a las {now_plus5.strftime('%d/%m/%Y %H:%M:%S')}")
     monitor_live_and_notify()
     heartbeat()
     logging.info(f"[MONITOR] Ejecutado monitoreo a las {now_plus5.strftime('%d/%m/%Y %H:%M:%S')}")
 
+def run_threaded(job_func):
+    """Ejecuta cada job en un hilo independiente"""
+    job_thread = threading.Thread(target=job_func)
+    job_thread.start()
+
 def main():
     logging.info("Script iniciado (Sportmonks v3 football).")
 
-    schedule.every(15).minutes.do(job_prematch)
-    schedule.every(2).minutes.do(job_monitor)
+    # 👇 cada tarea se dispara en paralelo
+    schedule.every(15).minutes.do(run_threaded, job_prematch)
+    schedule.every(2).minutes.do(run_threaded, job_monitor)
 
     while True:
         schedule.run_pending()
