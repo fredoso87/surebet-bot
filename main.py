@@ -516,11 +516,10 @@ def fetch_fixture_details(fixture_id):
 
     return state_id, match_minute
 
-
-
 def monitor_live_and_notify():
     rows = db_exec("""
-        SELECT id, event_id, home_team, away_team, odds_over, odds_under, stake_over, stake_under
+        SELECT id, event_id, home_team, away_team, odds_over, odds_under, stake_over, stake_under,
+               last_home_score, last_away_score
         FROM matches
         WHERE track_live=TRUE
           AND market='over_under'
@@ -545,8 +544,11 @@ def monitor_live_and_notify():
         under_live = float(ev.get("cuota_under25") or 0)
         bookmaker_live_name = ev.get("bookmaker_name") or ""
 
-        # 👇 Consultamos estado y minuto desde la API de fixtures
+        # 👇 Consultamos estado, minuto y marcador desde la API de fixtures
         state_id, match_minute = fetch_fixture_details(fixture_id)
+        fixture_data = sportmonks_request(f"/fixtures/{fixture_id}", params={"include": "periods,scores"}).get("data", {})
+        home_score = fixture_data.get("home_score", {}).get("current", 0)
+        away_score = fixture_data.get("away_score", {}).get("current", 0)
 
         # 👇 Ignorar partidos desde state_id 3 hasta 13
         if state_id is not None and 3 <= state_id <= 13:
@@ -571,11 +573,27 @@ def monitor_live_and_notify():
         away = pm.get("away_team") or ""
         over_odds_prematch = float(pm.get("odds_over") or 0)
 
+        # 👇 Detectar gol antes del minuto 20
+        last_home = pm.get("last_home_score") or 0
+        last_away = pm.get("last_away_score") or 0
+        if (home_score > last_home or away_score > last_away) and match_minute <= 20:
+            msg = (
+                f"⚽️ GOL temprano en {home} vs {away} (min {match_minute}).\n"
+                f"Marcador actual: {home_score}-{away_score}.\n"
+                f"👉 Considerar CASHOUT."
+            )
+            send_telegram(msg)
+            try:
+                db_exec("UPDATE matches SET last_home_score=%s, last_away_score=%s WHERE id=%s",
+                        (home_score, away_score, match_id_db))
+            except Exception as e:
+                logging.error(f"Error actualizando marcador: {e}")
+
+        # 👇 Lógica de surebet (igual que antes)
         implied_sum, s_over, s_under, profit_abs, profit_pct = compute_surebet_stakes(
             over_odds_prematch, under_live, BASE_STAKE
         )
 
-        # 👇 Calcular umbral de surebet
         umbral_surebet = None
         if over_odds_prematch > 1:
             try:
@@ -605,8 +623,8 @@ def monitor_live_and_notify():
                     f"Over 2.5 pre @ {over_odds_prematch} | Under 2.5 live @ {under_live} ({bookmaker_live_name}).\n"
                     f"Suma inversas: {implied_sum:.4f}. "
                     f"Umbral de surebet (Under mínimo): {umbral_surebet:.2f}."
-                send_telegram(msg)
                 )
+            send_telegram(msg)
             else:
                 msg = (
                     f"ℹ️ Sin surebet LIVE {home} vs {away} (min {match_minute}).\n"
@@ -614,8 +632,7 @@ def monitor_live_and_notify():
                     f"Suma inversas: {implied_sum:.4f}. "
                     f"Umbral de surebet no disponible (cuota inválida)."
                 )
-            #send_telegram(msg)
-
+            
 # CICLO PRINCIPAL
 # ---------------------------------
 _last_heartbeat = None
