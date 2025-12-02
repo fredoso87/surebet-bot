@@ -516,6 +516,9 @@ def fetch_fixture_details(fixture_id):
 
     return state_id, match_minute
 
+# Config opcional para cobertura parcial (0.0 a 1.0). Ej: 0.7 = 70% del minimax.
+COVERAGE_RATIO = 0.7
+
 def monitor_live_and_notify():
     rows = db_exec("""
         SELECT id, event_id, home_team, away_team, odds_over, odds_under, stake_over, stake_under,
@@ -544,13 +547,15 @@ def monitor_live_and_notify():
         under_live = float(ev.get("cuota_under25") or 0)
         bookmaker_live_name = ev.get("bookmaker_name") or ""
 
-        # 👇 Consultamos estado, minuto y marcador desde la API de fixtures
+        # Estado y minuto
         state_id, match_minute = fetch_fixture_details(fixture_id)
+
+        # Marcador actual
         fixture_data = sportmonks_request(f"/fixtures/{fixture_id}", params={"include": "periods,scores"}).get("data", {})
         home_score = fixture_data.get("home_score", {}).get("current", 0)
         away_score = fixture_data.get("away_score", {}).get("current", 0)
 
-        # 👇 Ignorar partidos desde state_id 3 hasta 13
+        # Desactivar por estado (3–13)
         if state_id is not None and 3 <= state_id <= 13:
             logging.info(f"Partido {fixture_id} con state_id={state_id}, se desactiva track_live.")
             try:
@@ -559,7 +564,7 @@ def monitor_live_and_notify():
                 logging.error(f"Error desactivando track_live: {e}")
             continue
 
-        # 👇 Ignorar partidos después del minuto 20
+        # Ignorar después del minuto 20
         if match_minute > 20:
             logging.info(f"Partido {fixture_id} minuto {match_minute}, se deja de monitorear.")
             continue
@@ -572,8 +577,9 @@ def monitor_live_and_notify():
         home = pm.get("home_team") or ""
         away = pm.get("away_team") or ""
         over_odds_prematch = float(pm.get("odds_over") or 0)
+        stake_over = float(pm.get("stake_over") or 0)
 
-        # 👇 Detectar gol antes del minuto 20
+        # Alerta de gol temprano (≤20)
         last_home = pm.get("last_home_score") or 0
         last_away = pm.get("last_away_score") or 0
         if (home_score > last_home or away_score > last_away) and match_minute <= 20:
@@ -589,11 +595,12 @@ def monitor_live_and_notify():
             except Exception as e:
                 logging.error(f"Error actualizando marcador: {e}")
 
-        # 👇 Lógica de surebet (igual que antes)
+        # Lógica de surebet con BASE_STAKE (mantengo tu comportamiento)
         implied_sum, s_over, s_under, profit_abs, profit_pct = compute_surebet_stakes(
             over_odds_prematch, under_live, BASE_STAKE
         )
 
+        # Umbral de surebet (Under mínimo)
         umbral_surebet = None
         if over_odds_prematch > 1:
             try:
@@ -617,22 +624,39 @@ def monitor_live_and_notify():
             except Exception as e:
                 logging.error(f"Error insert alert surebet_live: {e}")
         else:
-            if umbral_surebet is not None:
-                msg = (
-                    f"ℹ️ Sin surebet LIVE {home} vs {away} (min {match_minute}).\n"
-                    f"Over 2.5 pre @ {over_odds_prematch} | Under 2.5 live @ {under_live} ({bookmaker_live_name}).\n"
-                    f"Suma inversas: {implied_sum:.4f}. "
-                    f"Umbral de surebet (Under mínimo): {umbral_surebet:.2f}."
-                )
-            send_telegram(msg)
+            # No hay surebet: sugerir cobertura minimax y alternativa parcial
+            if stake_over > 0 and over_odds_prematch > 1 and under_live > 1:
+                stake_under_opt, loss_max = cobertura_minimax_over_under(stake_over, over_odds_prematch, under_live)
+                stake_under_partial = round(stake_under_opt * COVERAGE_RATIO, 2) if stake_under_opt else 0.0
+
+                if loss_max is not None and stake_under_opt > 0:
+                    msg = (
+                        f"🛡️ Cobertura minimax {home} vs {away} (min {match_minute}).\n"
+                        f"Over 2.5 prematch: stake {stake_over:.2f} @ {over_odds_prematch}.\n"
+                        f"Under 2.5 live: @ {under_live} ({bookmaker_live_name}).\n"
+                        f"⇒ Stake Under óptimo: {stake_under_opt:.2f} {CURRENCY} (pérdida máxima ≈ {loss_max:.2f} {CURRENCY}).\n"
+                        f"Alternativa parcial ({int(COVERAGE_RATIO*100)}%): {stake_under_partial:.2f} {CURRENCY} "
+                        f"para conservar upside."
+                    )
+                else:
+                    msg = (
+                        f"ℹ️ Sin surebet y no se pudo calcular cobertura minimax por datos inválidos.\n"
+                        f"Over 2.5 pre @ {over_odds_prematch} | Under 2.5 live @ {under_live}."
+                    )
+                send_telegram(msg)
             else:
-                msg = (
+                # Mensaje informativo sin cálculo de cobertura (por cuotas/stake inválidos)
+                base_msg = (
                     f"ℹ️ Sin surebet LIVE {home} vs {away} (min {match_minute}).\n"
                     f"Over 2.5 pre @ {over_odds_prematch} | Under 2.5 live @ {under_live} ({bookmaker_live_name}).\n"
-                    f"Suma inversas: {implied_sum:.4f}. "
-                    f"Umbral de surebet no disponible (cuota inválida)."
+                    f"Suma inversas: {implied_sum:.4f}."
                 )
-            
+                if umbral_surebet is not None:
+                    base_msg += f" Umbral de surebet (Under mínimo): {umbral_surebet:.2f}."
+                else:
+                    base_msg += " Umbral de surebet no disponible (cuota inválida)."
+                send_telegram(base_msg)
+           
 # CICLO PRINCIPAL
 # ---------------------------------
 _last_heartbeat = None
