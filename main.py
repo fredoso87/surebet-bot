@@ -517,8 +517,67 @@ def fetch_fixture_details(fixture_id):
 
     return state_id, match_minute
 
+def fetch_fixture_scores(fixture_id):
+    """
+    Consulta los goles actuales de un fixture en Sportmonks.
+    Devuelve (home_score, away_score).
+    """
+    fixture_data = sportmonks_request(f"/fixtures/{fixture_id}", params={"include": "scores"})
+    data = fixture_data.get("data", {})
+
+    home_score, away_score = 0, 0
+    for s in data.get("scores", []):
+        if s.get("description") == "CURRENT":
+            if s["score"]["participant"] == "home":
+                home_score = s["score"]["goals"]
+            elif s["score"]["participant"] == "away":
+                away_score = s["score"]["goals"]
+
+    return home_score, away_score
+
+
 # Config opcional para cobertura parcial (0.0 a 1.0). Ej: 0.7 = 70% del minimax.
 COVERAGE_RATIO = 0.7
+
+def cobertura_minimax_over_under(stake_over, cuota_over, cuota_under):
+    """
+    Calcula la cobertura minimax para un mercado Over/Under 2.5.
+    Devuelve (stake_under_opt, loss_max).
+
+    Parámetros:
+        stake_over (float): Stake ya apostado al Over 2.5.
+        cuota_over (float): Cuota del Over 2.5 (prematch).
+        cuota_under (float): Cuota del Under 2.5 (live).
+
+    Retorna:
+        stake_under_opt (float): Stake óptimo a apostar en el Under 2.5.
+        loss_max (float): Pérdida máxima asegurada con esa cobertura.
+    """
+    try:
+        # Validaciones básicas
+        if stake_over <= 0 or cuota_over <= 1 or cuota_under <= 1:
+            return 0.0, None
+
+        # Fórmula de cobertura minimax:
+        # Queremos que el beneficio neto en ambos escenarios sea lo más equilibrado posible.
+        # Stake_under = (stake_over * cuota_over) / cuota_under
+        stake_under_opt = (stake_over * cuota_over) / cuota_under
+
+        # Ganancia si gana Over
+        ganancia_over = (stake_over * cuota_over) - stake_over - stake_under_opt
+
+        # Ganancia si gana Under
+        ganancia_under = (stake_under_opt * cuota_under) - stake_under_opt - stake_over
+
+        # La pérdida máxima es el mínimo de ambas ganancias (si es negativo)
+        loss_max = min(ganancia_over, ganancia_under)
+
+        return stake_under_opt, loss_max
+
+    except Exception as e:
+        logging.error(f"Error en cobertura_minimax_over_under: {e}")
+        return 0.0, None
+
 def monitor_live_and_notify():
     rows = db_exec("""
         SELECT id, event_id, home_team, away_team, odds_over, odds_under, stake_over, stake_under
@@ -546,33 +605,11 @@ def monitor_live_and_notify():
         under_live = float(ev.get("cuota_under25") or 0)
         bookmaker_live_name = ev.get("bookmaker_name") or ""
 
-        # Estado y minuto (periods en request separado)
-        fixture_periods = sportmonks_request(
-            f"/fixtures/{fixture_id}",
-            params={"include": "periods"}
-        ).get("data", {})
+        # Estado y minuto usando helper
+        state_id, match_minute = fetch_fixture_details(fixture_id)
 
-        state_id = fixture_periods.get("state_id")
-        match_minute = 0
-        for p in fixture_periods.get("periods", []):
-            # Usamos el primer periodo que reporte 'minute'
-            if p.get("minute") is not None:
-                match_minute = p.get("minute")
-                break
-
-        # Marcador actual (scores en request separado)
-        fixture_scores = sportmonks_request(
-            f"/fixtures/{fixture_id}",
-            params={"include": "scores"}
-        ).get("data", {})
-
-        home_score, away_score = 0, 0
-        for s in fixture_scores.get("scores", []):
-            if s.get("description") == "CURRENT":
-                if s["score"]["participant"] == "home":
-                    home_score = s["score"]["goals"]
-                elif s["score"]["participant"] == "away":
-                    away_score = s["score"]["goals"]
+        # Marcador actual usando helper
+        home_score, away_score = fetch_fixture_scores(fixture_id)
 
         # Desactivar por estado (3–13)
         if state_id is not None and 3 <= state_id <= 13:
@@ -598,7 +635,7 @@ def monitor_live_and_notify():
         over_odds_prematch = float(pm.get("odds_over") or 0)
         stake_over = float(pm.get("stake_over") or 0)
 
-        # Alerta de gol temprano (≤20) sin columnas en BD
+        # Alerta de gol temprano (≤20)
         if (home_score + away_score) > 0 and match_minute <= 20:
             msg = (
                 f"⚽️ GOL temprano en {home} vs {away} (min {match_minute}).\n"
@@ -636,7 +673,6 @@ def monitor_live_and_notify():
             except Exception as e:
                 logging.error(f"Error insert alert surebet_live: {e}")
         else:
-            # No hay surebet: sugerir cobertura minimax y alternativa parcial
             if stake_over > 0 and over_odds_prematch > 1 and under_live > 1:
                 stake_under_opt, loss_max = cobertura_minimax_over_under(stake_over, over_odds_prematch, under_live)
                 stake_under_partial = round(stake_under_opt * COVERAGE_RATIO, 2) if stake_under_opt else 0.0
@@ -667,7 +703,8 @@ def monitor_live_and_notify():
                 else:
                     base_msg += " Umbral de surebet no disponible (cuota inválida)."
                 send_telegram(base_msg)
-          
+
+
 # CICLO PRINCIPAL
 # ---------------------------------
 _last_heartbeat = None
