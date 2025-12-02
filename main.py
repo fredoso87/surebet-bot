@@ -117,6 +117,7 @@ def load_bookmakers_map():
     return bookmaker_map
     
 BOOKMAKER_IDS = [212,127,152,83,84,28,26,24,16,9,2,8,35,18,20,21,123,91,216,215,1,5,24,22,33,35,39]
+BOOKMAKER_MAP = load_bookmakers_map()
 
 # ---------------------------------
 # DB
@@ -212,13 +213,13 @@ def compute_surebet_stakes(odds_over, odds_under, stake_total):
 # ---------------------------------
 # PREMATCH: mejores Over/Under 2.5 (marketId=7) + surebet prematch
 # ---------------------------------
+
 def fetch_prematch_over25():
     hoy = datetime.now(LIMA_TZ).date()
     manana = hoy + timedelta(days=3)
     base_url = f"{SPORTMONKS_BASE}/fixtures/between/{hoy.isoformat()}/{manana.isoformat()}"
     page = 1
     all_fixtures = []
-    BOOKMAKER_MAP = load_bookmakers_map()
     while True:
         try:
             url = f"{base_url}?api_token={SPORTMONKS_TOKEN}&page={page}&include=participants"
