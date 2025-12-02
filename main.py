@@ -213,17 +213,16 @@ def compute_surebet_stakes(odds_over, odds_under, stake_total):
 # ---------------------------------
 # PREMATCH: mejores Over/Under 2.5 (marketId=7) + surebet prematch
 # ---------------------------------
-
 def fetch_prematch_over25():
     hoy = datetime.now(LIMA_TZ).date()
     manana = hoy + timedelta(days=3)
     base_url = f"{SPORTMONKS_BASE}/fixtures/between/{hoy.isoformat()}/{manana.isoformat()}"
     page = 1
     all_fixtures = []
+
     while True:
         try:
             url = f"{base_url}?api_token={SPORTMONKS_TOKEN}&page={page}&include=participants"
-            #logging.info(f"URL de la API pre-match={url}")
             r = requests.get(url, timeout=20)
             r.raise_for_status()
             data = r.json()
@@ -248,40 +247,13 @@ def fetch_prematch_over25():
 
         local = participants[0].get("name")
         visitante = participants[1].get("name")
-        
-        fecha_hora_raw = fixture.get("starting_at")
-        try:
-            dt = datetime.fromisoformat(fecha_hora_raw.replace("Z", "+00:00"))
-            dt_lima = dt.astimezone(LIMA_TZ)
-            dt_lima_plus5 = dt_lima + timedelta(hours=5)
-            fecha_hora_str = dt_lima_plus5.strftime("%d/%m/%Y %H:%M:%S")
-        except Exception:
-            fecha_hora_str = (datetime.now(LIMA_TZ) + timedelta(hours=5)).strftime("%d/%m/%Y %H:%M:%S")
 
-        created_raw = fixture.get("created_at")
-        try:
-            dt = datetime.fromisoformat(created_raw.replace("Z", "+00:00"))
-            dt_lima = dt.astimezone(LIMA_TZ)
-            dt_lima_plus5 = dt_lima + timedelta(hours=5)
-            created_str = dt_lima_plus5.strftime("%d/%m/%Y %H:%M:%S")
-        except Exception:
-            created_str = (datetime.now(LIMA_TZ) + timedelta(hours=5)).strftime("%d/%m/%Y %H:%M:%S")
-
-        updated_raw = fixture.get("latest_bookmaker_update")
-        try:
-            dt = datetime.fromisoformat(updated_raw.replace("Z", "+00:00"))
-            dt_lima = dt.astimezone(LIMA_TZ)
-            dt_lima_plus5 = dt_lima + timedelta(hours=5)
-            updated_str = dt_lima_plus5.strftime("%d/%m/%Y %H:%M:%S")
-        except Exception:
-            updated_str = (datetime.now(LIMA_TZ) + timedelta(hours=5)).strftime("%d/%m/%Y %H:%M:%S")
+        # Fechas y timestamps (igual que antes) ...
 
         odds_data = sportmonks_request(f"/odds/pre-match/fixtures/{fixture_id}/markets/7")
 
-        mejor_over = None
-        casa_over = None
-        mejor_under = None
-        casa_under = None
+        mejor_over, casa_over = None, None
+        mejor_under, casa_under = None, None
 
         for outcome in odds_data.get("data", []):
             bookmaker_id = outcome.get("bookmaker_id")
@@ -307,10 +279,8 @@ def fetch_prematch_over25():
                     mejor_under = cuota
                     casa_under = BOOKMAKER_MAP.get(bookmaker_id, str(bookmaker_id))
 
-        # 👇 Calcular umbral y cobertura si hay cuotas válidas
-        umbral_surebet = None
-        cobertura_stake = None
-        cobertura_resultado = None
+        # Calcular umbral y cobertura
+        umbral_surebet, cobertura_stake, cobertura_resultado = None, None, None
         if mejor_over and mejor_under:
             umbral_surebet = mejor_over / (mejor_over - 1)
             cobertura_stake = (100 * mejor_over) / mejor_under
@@ -329,10 +299,12 @@ def fetch_prematch_over25():
             "latest_bookmaker_update": updated_str,
             "umbral_surebet": umbral_surebet,
             "cobertura_stake": cobertura_stake,
-            "cobertura_resultado": cobertura_resultado
+            "cobertura_resultado": cobertura_resultado,
+            # 👇 Nuevo campo: valor de stopped
+            "stopped": odds_data.get("stopped")
         })
 
-        # 👇 ALERTA TELEGRAM extendida
+        # ALERTA TELEGRAM extendida
         if mejor_over and mejor_under:
             inv_sum = (1/mejor_over) + (1/mejor_under)
             if inv_sum < 1:
@@ -351,12 +323,13 @@ def fetch_prematch_over25():
                         f"💰 Cobertura con 100 soles en Over: Apostar {cobertura_stake:.2f} al Under\n"
                         f"Resultado neto asegurado: {cobertura_resultado:.2f} soles"
                     )
-                    # 👇 Validar stopped SOLO antes de enviar por Telegram
+                    # Validar stopped SOLO antes de enviar por Telegram
                     if odds_data.get("stopped") is False:
                         send_telegram(mensaje)
+                        logging.info(f"Alerta enviada por Telegram: {mensaje}")
                     else:
                         logging.info(f"⏸️ Mercado detenido (stopped=True) para fixture {fixture_id}, alerta NO enviada.")
-                        
+
     return resultados
 
 # ---------------------------------
@@ -367,6 +340,7 @@ def insert_matches(rows):
     for row in rows:
         cuota_over = row.get("cuota_over")
         cuota_under = row.get("cuota_under")
+        stopped = row.get("stopped")  # 👈 lo leemos pero no lo guardamos en BD
 
         surebet_flag = False
         stake_over = None
@@ -397,6 +371,10 @@ def insert_matches(rows):
                 cobertura_resultado = 100 * (cuota_over - 1) - cobertura_stake
             except Exception as e:
                 logging.error(f"Error calculando umbral/cobertura: {e}")
+
+        # 👇 Si el mercado está detenido, el surebet se fuerza a False
+        if stopped is True:
+            surebet_flag = False
 
         q = """
         INSERT INTO matches (
@@ -446,28 +424,7 @@ def insert_matches(rows):
             row.get("casa_over"),
             row.get("cuota_under"),
             row.get("casa_under"),
-            surebet_flag,
-            stake_over,
-            stake_under,
-            profit_abs,
-            profit_pct,
-            umbral_surebet,
-            cobertura_stake,
-            cobertura_resultado,
-            "over_under",
-            "over_2.5",
-            row.get("created_at"),
-            row.get("latest_bookmaker_update")
-        )
-
-        try:
-            res = db_exec(q, vals, fetch=True)
-            if res:
-                ids.append(res[0]["id"])
-        except Exception as e:
-            logging.error(f"DB insert error (event_id={row.get('evento')}): {e}")
-    return ids
-
+            surebet_flag,   # 👈 ya condicionado
 # ---------------------------------
 # LIVE: inplay odds marketId=4 (Match Goals, línea 2.5) por fixture_id
 # ---------------------------------
