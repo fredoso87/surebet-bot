@@ -621,8 +621,12 @@ def monitor_live_and_notify():
             continue
 
         # Ignorar después del minuto 20
-        if match_minute > 20:
+        if match_minute > 30:
             logging.info(f"Partido {fixture_id} minuto {match_minute}, se deja de monitorear.")
+            try:
+                db_exec("UPDATE matches SET track_live=FALSE WHERE event_id=%s", (fixture_id,))
+            except Exception as e:
+                logging.error(f"Error desactivando track_live minuto: {e}")
             continue
 
         pm = prematch_index.get(fixture_id)
@@ -636,14 +640,18 @@ def monitor_live_and_notify():
         stake_over = float(pm.get("stake_over") or 0)
 
         # Alerta de gol temprano (≤20)
-        if (home_score + away_score) > 0 and match_minute <= 20:
+        if (home_score + away_score) > 0 and match_minute <= 30:
             msg = (
                 f"⚽️ GOL temprano en {home} vs {away} (min {match_minute}).\n"
                 f"Marcador actual: {home_score}-{away_score}.\n"
                 f"👉 Considerar CASHOUT."
             )
             send_telegram(msg)
-
+            try:
+                db_exec("UPDATE matches SET track_live=FALSE WHERE event_id=%s", (fixture_id,))
+            except Exception as e:
+                logging.error(f"Error desactivando track_live: {e}")
+            continue
         # Lógica de surebet con BASE_STAKE
         implied_sum, s_over, s_under, profit_abs, profit_pct = compute_surebet_stakes(
             over_odds_prematch, under_live, BASE_STAKE
@@ -713,7 +721,7 @@ def heartbeat():
     global _last_heartbeat
     now = datetime.now(LIMA_TZ)
     if _last_heartbeat is None or (now - _last_heartbeat) >= timedelta(minutes=30):
-        send_telegram("Heartbeat: activo (prematch mkt7 + live mkt4).")
+        #send_telegram("Heartbeat: activo (prematch mkt7 + live mkt4).")
         _last_heartbeat = now
 
 def run_cycle_prematch(tag):
@@ -726,7 +734,7 @@ def run_cycle_prematch(tag):
     except Exception as e:
         logging.error(f"Error insert prematch: {e}")
     logging.info(f"[{tag}] Prematch Over/Under 2.5 procesados: {len(ids)}")
-    send_telegram(f"[{tag}] Prematch Over/Under 2.5 en DB: {len(ids)}")
+    #send_telegram(f"[{tag}] Prematch Over/Under 2.5 en DB: {len(ids)}")
 
 def job_prematch():
     now = datetime.now(LIMA_TZ)
