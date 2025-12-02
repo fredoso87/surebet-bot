@@ -605,6 +605,7 @@ def monitor_live_and_notify():
                     f"Over 2.5 pre @ {over_odds_prematch} | Under 2.5 live @ {under_live} ({bookmaker_live_name}).\n"
                     f"Suma inversas: {implied_sum:.4f}. "
                     f"Umbral de surebet (Under mínimo): {umbral_surebet:.2f}."
+                send_telegram(msg)
                 )
             else:
                 msg = (
@@ -613,7 +614,7 @@ def monitor_live_and_notify():
                     f"Suma inversas: {implied_sum:.4f}. "
                     f"Umbral de surebet no disponible (cuota inválida)."
                 )
-            send_telegram(msg)
+            #send_telegram(msg)
 
 # CICLO PRINCIPAL
 # ---------------------------------
