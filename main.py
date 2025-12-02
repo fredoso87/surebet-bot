@@ -548,7 +548,7 @@ def monitor_live_and_notify():
 
         # Estado y minuto (periods en request separado)
         fixture_periods = sportmonks_request(
-            f"/football/fixtures/{fixture_id}",
+            f"/fixtures/{fixture_id}",
             params={"include": "periods"}
         ).get("data", {})
 
@@ -562,7 +562,7 @@ def monitor_live_and_notify():
 
         # Marcador actual (scores en request separado)
         fixture_scores = sportmonks_request(
-            f"/football/fixtures/{fixture_id}",
+            f"/fixtures/{fixture_id}",
             params={"include": "scores"}
         ).get("data", {})
 
