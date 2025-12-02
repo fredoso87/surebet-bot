@@ -351,10 +351,14 @@ def fetch_prematch_over25():
                         f"💰 Cobertura con 100 soles en Over: Apostar {cobertura_stake:.2f} al Under\n"
                         f"Resultado neto asegurado: {cobertura_resultado:.2f} soles"
                     )
-                    send_telegram(mensaje)
-                    logging.info(f"Alerta enviada por Telegram: {mensaje}")
-
+                    # 👇 Validar stopped SOLO antes de enviar por Telegram
+                    if odds_data.get("stopped") is False:
+                        send_telegram(mensaje)
+                    else:
+                        logging.info(f"⏸️ Mercado detenido (stopped=True) para fixture {fixture_id}, alerta NO enviada.")
+                        
     return resultados
+
 # ---------------------------------
 # INSERT DB: guarda mejores over/under, casas, surebet y stakes con BASE_STAKE
 # ---------------------------------
