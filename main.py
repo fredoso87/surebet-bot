@@ -695,13 +695,13 @@ def monitor_live_and_notify():
     # --- NUEVO BLOQUE: buscar partidos de HOY por commence_time ---
     hoy = datetime.now(LIMA_TZ).date()
     partidos_hoy = db_exec("""
-        SELECT id, event_id, home_team, away_team, odds_over, odds_under
-        FROM matches
-        WHERE DATE(commence_time) = CURDATE()
-        AND commence_time BETWEEN DATE_SUB(NOW(), INTERVAL 2 HOUR) AND DATE_ADD(NOW(), INTERVAL 1 HOUR)
-        AND market='over_under';
-
+    SELECT id, event_id, home_team, away_team, odds_over, odds_under
+    FROM matches
+    WHERE DATE(commence_time) = %s
+      AND commence_time BETWEEN (NOW() - INTERVAL '2 hours') AND (NOW() + INTERVAL '1 hour')
+      AND market='over_under'
     """, (hoy,), fetch=True)
+
 
     if not partidos_hoy:
         logging.info("No hay partidos de hoy en la BD para buscar surebets.")
