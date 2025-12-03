@@ -274,9 +274,8 @@ def fetch_prematch_over25():
 
         odds_data = sportmonks_request(f"/odds/pre-match/fixtures/{fixture_id}/markets/7")
 
-        mejor_over, casa_over = None, None
-        mejor_under, casa_under = None, None
-        created_str, updated_str = None, None
+        mejor_over, casa_over, created_over, updated_over = None, None, None, None
+        mejor_under, casa_under, created_under, updated_under = None, None, None, None
 
         for outcome in odds_data.get("data", []):
             bookmaker_id = outcome.get("bookmaker_id")
@@ -296,15 +295,19 @@ def fetch_prematch_over25():
                 if mejor_over is None or cuota > mejor_over:
                     mejor_over = cuota
                     casa_over = BOOKMAKER_MAP.get(bookmaker_id, str(bookmaker_id))
-                    created_str = parse_datetime_safe(outcome.get("created_at"))
-                    updated_str = parse_datetime_safe(outcome.get("latest_bookmaker_update"))
+                    created_over = parse_datetime_safe(outcome.get("created_at"))
+                    updated_over = parse_datetime_safe(outcome.get("latest_bookmaker_update"))
 
             if label == "under" and total_line in {"2.5"}:
                 if mejor_under is None or cuota > mejor_under:
                     mejor_under = cuota
                     casa_under = BOOKMAKER_MAP.get(bookmaker_id, str(bookmaker_id))
-                    created_str = parse_datetime_safe(outcome.get("created_at"))
-                    updated_str = parse_datetime_safe(outcome.get("latest_bookmaker_update"))
+                    created_under = parse_datetime_safe(outcome.get("created_at"))
+                    updated_under = parse_datetime_safe(outcome.get("latest_bookmaker_update"))
+
+        # elegir qué timestamps usar (si hay over y under, prioriza el más reciente)
+        created_str = created_over or created_under
+        updated_str = updated_over or updated_under
 
         umbral_surebet, cobertura_stake, cobertura_resultado = None, None, None
         if mejor_over and mejor_under:
@@ -329,6 +332,7 @@ def fetch_prematch_over25():
             "stopped": odds_data.get("stopped")
         })
 
+        # ALERTA TELEGRAM extendida
         if mejor_over and mejor_under:
             inv_sum = (1/mejor_over) + (1/mejor_under)
             if inv_sum < 1:
@@ -358,6 +362,7 @@ def fetch_prematch_over25():
 # ---------------------------------
 # INSERT DB: guarda mejores over/under, casas, surebet y stakes con BASE_STAKE
 # ---------------------------------
+
 def insert_matches(rows):
     ids = []
     for row in rows:
@@ -468,6 +473,7 @@ def insert_matches(rows):
         except Exception as e:
             logging.error(f"DB insert error (event_id={row.get('evento')}): {e}")
     return ids
+
 # ---------------------------------
 # LIVE: inplay odds marketId=4 (Match Goals, línea 2.5) por fixture_id
 # ---------------------------------
