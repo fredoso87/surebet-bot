@@ -116,7 +116,7 @@ def load_bookmakers_map():
     logging.info(f"🎯 Bookmakers cargados: {len(bookmaker_map)} casas de apuesta (total crudo: {len(all_bookmakers)})")
     return bookmaker_map
     
-BOOKMAKER_IDS = [212,127,152,83,84,28,26,24,16,9,2,8,35,18,20,21,123,91,216,215,1,5,24,22,33,35,39]
+BOOKMAKER_IDS = [8,24,26,33,35,84,100,127,140,216]
 BOOKMAKER_MAP = load_bookmakers_map()
 
 # ---------------------------------
@@ -788,7 +788,7 @@ def run_threaded(job_func):
 
 def main():
     logging.info("Script iniciado (Sportmonks v3 football).")
-    print_bookmakers()
+    #print_bookmakers()
     # Ejecutar prematch inmediatamente al inicio
     run_threaded(job_prematch)
     # 👇 cada tarea se dispara en paralelo
