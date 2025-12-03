@@ -248,7 +248,7 @@ def fetch_prematch_over25():
         local = participants[0].get("name")
         visitante = participants[1].get("name")
 
-        # 🔹 CAMBIO: Definir fecha_hora_str, created_str y updated_str de forma segura
+        # fecha del partido (fixture)
         fecha_hora_raw = fixture.get("starting_at")
         try:
             dt = datetime.fromisoformat(fecha_hora_raw.replace("Z", "+00:00"))
@@ -256,22 +256,23 @@ def fetch_prematch_over25():
         except Exception:
             fecha_hora_str = (datetime.now(LIMA_TZ) + timedelta(hours=5)).strftime("%d/%m/%Y %H:%M:%S")
 
-        created_raw = fixture.get("created_at")
+        # 🔹 CAMBIO: ahora sacamos created_at y latest_bookmaker_update del odds_data
+        odds_data = sportmonks_request(f"/odds/pre-match/fixtures/{fixture_id}/markets/7")
+
+        created_raw = odds_data.get("created_at")
         try:
             dt = datetime.fromisoformat(created_raw.replace("Z", "+00:00"))
             created_str = (dt.astimezone(LIMA_TZ) + timedelta(hours=5)).strftime("%d/%m/%Y %H:%M:%S")
         except Exception:
-            created_str = (datetime.now(LIMA_TZ) + timedelta(hours=5)).strftime("%d/%m/%Y %H:%M:%S")
+            created_str = None
 
-        updated_raw = fixture.get("latest_bookmaker_update")
+        updated_raw = odds_data.get("latest_bookmaker_update")
         try:
             dt = datetime.fromisoformat(updated_raw.replace("Z", "+00:00"))
             updated_str = (dt.astimezone(LIMA_TZ) + timedelta(hours=5)).strftime("%d/%m/%Y %H:%M:%S")
         except Exception:
-            updated_str = (datetime.now(LIMA_TZ) + timedelta(hours=5)).strftime("%d/%m/%Y %H:%M:%S")
+            updated_str = None
         # 🔹 FIN DEL CAMBIO
-
-        odds_data = sportmonks_request(f"/odds/pre-match/fixtures/{fixture_id}/markets/7")
 
         mejor_over, casa_over = None, None
         mejor_under, casa_under = None, None
@@ -311,13 +312,13 @@ def fetch_prematch_over25():
             "evento": fixture_id,
             "local": normalize_text(local),
             "visitante": normalize_text(visitante),
-            "fecha_hora": fecha_hora_str,   # ✅ ahora siempre está definido
+            "fecha_hora": fecha_hora_str,
             "cuota_over": mejor_over,
             "casa_over": normalize_text(casa_over),
             "cuota_under": mejor_under,
             "casa_under": normalize_text(casa_under),
-            "created_at": created_str,      # ✅ ahora siempre está definido
-            "latest_bookmaker_update": updated_str,  # ✅ ahora siempre está definido
+            "created_at": created_str,      # ✅ ahora viene de odds_data
+            "latest_bookmaker_update": updated_str,  # ✅ ahora viene de odds_data
             "umbral_surebet": umbral_surebet,
             "cobertura_stake": cobertura_stake,
             "cobertura_resultado": cobertura_resultado,
