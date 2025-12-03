@@ -424,7 +424,27 @@ def insert_matches(rows):
             row.get("casa_over"),
             row.get("cuota_under"),
             row.get("casa_under"),
-            surebet_flag,   # 👈 ya condicionado
+            surebet_flag,   # 👈 ya condicionado por stopped
+            stake_over,
+            stake_under,
+            profit_abs,
+            profit_pct,
+            umbral_surebet,
+            cobertura_stake,
+            cobertura_resultado,
+            "over_under",
+            "over_2.5",
+            row.get("created_at"),
+            row.get("latest_bookmaker_update")
+        )
+
+        try:
+            res = db_exec(q, vals, fetch=True)
+            if res:
+                ids.append(res[0]["id"])
+        except Exception as e:
+            logging.error(f"DB insert error (event_id={row.get('evento')}): {e}")
+    return ids
 # ---------------------------------
 # LIVE: inplay odds marketId=4 (Match Goals, línea 2.5) por fixture_id
 # ---------------------------------
@@ -581,7 +601,7 @@ def monitor_live_and_notify():
                 logging.error(f"Error desactivando track_live: {e}")
             continue
 
-        # Ignorar después del minuto 20
+        # Ignorar después del minuto 30
         if match_minute > 30:
             logging.info(f"Partido {fixture_id} minuto {match_minute}, se deja de monitorear.")
             try:
@@ -600,7 +620,7 @@ def monitor_live_and_notify():
         over_odds_prematch = float(pm.get("odds_over") or 0)
         stake_over = float(pm.get("stake_over") or 0)
 
-        # Alerta de gol temprano (≤20)
+        # ⚽️ Alerta de gol temprano (≤30)
         if (home_score + away_score) > 0 and match_minute <= 30:
             msg = (
                 f"⚽️ GOL temprano en {home} vs {away} (min {match_minute}).\n"
@@ -608,11 +628,27 @@ def monitor_live_and_notify():
                 f"👉 Considerar CASHOUT."
             )
             send_telegram(msg)
+
+            # 👇 Nueva lógica: si no haces cashout, calcular stake óptimo en Under
+            if stake_over > 0 and over_odds_prematch > 1 and under_live > 1:
+                stake_under_opt, loss_max = cobertura_minimax_over_under(
+                    stake_over, over_odds_prematch, under_live
+                )
+                if stake_under_opt > 0:
+                    msg_alt = (
+                        f"⚖️ Si NO haces cashout:\n"
+                        f"Para maximizar ganancias del surebet:\n"
+                        f"⇒ Apostar {stake_under_opt:.2f} {CURRENCY} al Under 2.5 @ {under_live} ({bookmaker_live_name}).\n"
+                        f"Pérdida máxima ≈ {loss_max:.2f} {CURRENCY}."
+                    )
+                    send_telegram(msg_alt)
+
             try:
                 db_exec("UPDATE matches SET track_live=FALSE WHERE event_id=%s", (fixture_id,))
             except Exception as e:
                 logging.error(f"Error desactivando track_live: {e}")
             continue
+
         # Lógica de surebet con BASE_STAKE
         implied_sum, s_over, s_under, profit_abs, profit_pct = compute_surebet_stakes(
             over_odds_prematch, under_live, BASE_STAKE
@@ -672,7 +708,6 @@ def monitor_live_and_notify():
                 else:
                     base_msg += " Umbral de surebet no disponible (cuota inválida)."
                 send_telegram(base_msg)
-
 
 # CICLO PRINCIPAL
 # ---------------------------------
