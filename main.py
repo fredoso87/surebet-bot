@@ -788,6 +788,7 @@ def run_threaded(job_func):
 
 def main():
     logging.info("Script iniciado (Sportmonks v3 football).")
+    print_bookmakers()
     # Ejecutar prematch inmediatamente al inicio
     run_threaded(job_prematch)
     # 👇 cada tarea se dispara en paralelo
