@@ -209,6 +209,22 @@ def compute_surebet_stakes(odds_over, odds_under, stake_total):
         logging.error(f"Error compute_surebet_stakes: {e}")
         return 999.0, 0.0, 0.0, 0.0, 0.0
 
+def parse_datetime_safe(raw):
+    """
+    Convierte un string de fecha del response de odds_data a formato Lima (+5 horas).
+    Soporta formatos con 'Z' y sin 'Z'.
+    """
+    if not raw:
+        return None
+    try:
+        if "Z" in raw:
+            dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        else:
+            dt = datetime.strptime(raw, "%Y-%m-%d %H:%M:%S")
+        return (dt.astimezone(LIMA_TZ) + timedelta(hours=5)).strftime("%d/%m/%Y %H:%M:%S")
+    except Exception as e:
+        logging.error(f"Error parseando fecha {raw}: {e}")
+        return None
 
 # ---------------------------------
 # PREMATCH: mejores Over/Under 2.5 (marketId=7) + surebet prematch
@@ -248,7 +264,7 @@ def fetch_prematch_over25():
         local = participants[0].get("name")
         visitante = participants[1].get("name")
 
-        # fecha del partido (fixture)
+        # fecha del partido
         fecha_hora_raw = fixture.get("starting_at")
         try:
             dt = datetime.fromisoformat(fecha_hora_raw.replace("Z", "+00:00"))
@@ -256,26 +272,11 @@ def fetch_prematch_over25():
         except Exception:
             fecha_hora_str = (datetime.now(LIMA_TZ) + timedelta(hours=5)).strftime("%d/%m/%Y %H:%M:%S")
 
-        # 🔹 CAMBIO: ahora sacamos created_at y latest_bookmaker_update del odds_data
         odds_data = sportmonks_request(f"/odds/pre-match/fixtures/{fixture_id}/markets/7")
-
-        created_raw = odds_data.get("created_at")
-        try:
-            dt = datetime.fromisoformat(created_raw.replace("Z", "+00:00"))
-            created_str = (dt.astimezone(LIMA_TZ) + timedelta(hours=5)).strftime("%d/%m/%Y %H:%M:%S")
-        except Exception:
-            created_str = None
-
-        updated_raw = odds_data.get("latest_bookmaker_update")
-        try:
-            dt = datetime.fromisoformat(updated_raw.replace("Z", "+00:00"))
-            updated_str = (dt.astimezone(LIMA_TZ) + timedelta(hours=5)).strftime("%d/%m/%Y %H:%M:%S")
-        except Exception:
-            updated_str = None
-        # 🔹 FIN DEL CAMBIO
 
         mejor_over, casa_over = None, None
         mejor_under, casa_under = None, None
+        created_str, updated_str = None, None
 
         for outcome in odds_data.get("data", []):
             bookmaker_id = outcome.get("bookmaker_id")
@@ -295,13 +296,16 @@ def fetch_prematch_over25():
                 if mejor_over is None or cuota > mejor_over:
                     mejor_over = cuota
                     casa_over = BOOKMAKER_MAP.get(bookmaker_id, str(bookmaker_id))
+                    created_str = parse_datetime_safe(outcome.get("created_at"))
+                    updated_str = parse_datetime_safe(outcome.get("latest_bookmaker_update"))
 
             if label == "under" and total_line in {"2.5"}:
                 if mejor_under is None or cuota > mejor_under:
                     mejor_under = cuota
                     casa_under = BOOKMAKER_MAP.get(bookmaker_id, str(bookmaker_id))
+                    created_str = parse_datetime_safe(outcome.get("created_at"))
+                    updated_str = parse_datetime_safe(outcome.get("latest_bookmaker_update"))
 
-        # Calcular umbral y cobertura
         umbral_surebet, cobertura_stake, cobertura_resultado = None, None, None
         if mejor_over and mejor_under:
             umbral_surebet = mejor_over / (mejor_over - 1)
@@ -317,15 +321,14 @@ def fetch_prematch_over25():
             "casa_over": normalize_text(casa_over),
             "cuota_under": mejor_under,
             "casa_under": normalize_text(casa_under),
-            "created_at": created_str,      # ✅ ahora viene de odds_data
-            "latest_bookmaker_update": updated_str,  # ✅ ahora viene de odds_data
+            "created_at": created_str,
+            "latest_bookmaker_update": updated_str,
             "umbral_surebet": umbral_surebet,
             "cobertura_stake": cobertura_stake,
             "cobertura_resultado": cobertura_resultado,
             "stopped": odds_data.get("stopped")
         })
 
-        # ALERTA TELEGRAM extendida (igual que antes)...
         if mejor_over and mejor_under:
             inv_sum = (1/mejor_over) + (1/mejor_under)
             if inv_sum < 1:
@@ -351,6 +354,7 @@ def fetch_prematch_over25():
                         logging.info(f"⏸️ Mercado detenido (stopped=True) para fixture {fixture_id}, alerta NO enviada.")
 
     return resultados
+
 # ---------------------------------
 # INSERT DB: guarda mejores over/under, casas, surebet y stakes con BASE_STAKE
 # ---------------------------------
