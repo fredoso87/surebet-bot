@@ -116,7 +116,8 @@ def load_bookmakers_map():
     logging.info(f"🎯 Bookmakers cargados: {len(bookmaker_map)} casas de apuesta (total crudo: {len(all_bookmakers)})")
     return bookmaker_map
     
-BOOKMAKER_IDS = [8,24,26,33,35,84,100,127,140,216]
+#BOOKMAKER_IDS = [8,24,26,33,35,84,100,127,140,216]
+BOOKMAKER_IDS = []
 BOOKMAKER_MAP = load_bookmakers_map()
 
 # ---------------------------------
@@ -283,8 +284,8 @@ def fetch_prematch_over25():
             total_line = outcome.get("total")
             cuota = outcome.get("value")
 
-            if BOOKMAKER_IDS and bookmaker_id not in BOOKMAKER_IDS:
-                continue
+            #if BOOKMAKER_IDS and bookmaker_id not in BOOKMAKER_IDS:
+            #    continue
 
             try:
                 cuota = float(cuota)
