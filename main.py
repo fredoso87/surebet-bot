@@ -38,7 +38,7 @@ SPORT = "football"
 STATUS_DEFAULT = "pending"  # puedes combinar: "pending,live"
 
 # Lista de bookmakers configurable (comienza mínima para evitar 403)
-LIVE_BOOKMAKERS = ["Apuesta Total", "MelBet"]
+LIVE_BOOKMAKERS = ["Stake", "MelBet"]
 
 # Cobertura parcial
 COVERAGE_RATIO = 0.7
