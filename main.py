@@ -38,7 +38,7 @@ SPORT = "football"
 STATUS_DEFAULT = "pending"  # pending, live, settled (o combinados "pending,live")
 
 # Bookmakers configurables para LIVE odds
-LIVE_BOOKMAKERS = ["Bet365", "Unibet"]
+LIVE_BOOKMAKERS = ["Bet365", "Apuesta Total", "Betano", "Coolbet", "Inkabet", "Betsafe", "Betsafe", "1xbet", "Betcris", "MelBet", "Stake"]
 
 # Cobertura parcial
 COVERAGE_RATIO = 0.7
@@ -339,7 +339,7 @@ def fetch_prematch_over25():
     events = fetch_events(today, today, STATUS_DEFAULT)
     resultados = []
 
-    for ev in events:
+    for ev in events[:50]:
         ev_id = ev.get("id")
         home = normalize_text(ev.get("home"))
         away = normalize_text(ev.get("away"))
