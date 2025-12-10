@@ -35,15 +35,15 @@ ODDS_API_KEY = "31a69749ed08a2878f08fc58d8c564bd411d14caaa81b8517515b7cc929cf683
 EVENTS_BASE = "https://api2.odds-api.io/v3/events"
 ODDS_BASE   = "https://api2.odds-api.io/v3/odds"
 SPORT = "football"
-STATUS_DEFAULT = "pending"  # puedes combinar: "pending,live"
+STATUS_DEFAULT = "pending"  # puedes combinar "pending,live" si lo necesitas
 
-# Lista de bookmakers configurable (comienza mínima para evitar 403)
+# Lista de bookmakers configurable (empieza mínima para evitar 403)
 LIVE_BOOKMAKERS = ["Stake", "MelBet"]
 
-# Cobertura parcial
+# Cobertura parcial sugerida
 COVERAGE_RATIO = 0.7
 
-# Límite de eventos a procesar por ciclo para evitar rate limit
+# Limitar eventos por ciclo para controlar rate limit
 EVENT_LIMIT = 10
 
 logging.basicConfig(
@@ -69,7 +69,10 @@ def valid_odds(odds):
     except Exception:
         return False
 
-def iso_to_dt(raw_iso: str):
+def iso_to_lima_dt(raw_iso: str) -> datetime:
+    """
+    Convierte ISO UTC (con 'Z') a datetime aware en Lima (sin restar horas manualmente).
+    """
     if not raw_iso:
         return datetime.now(LIMA_TZ)
     try:
@@ -78,11 +81,6 @@ def iso_to_dt(raw_iso: str):
     except Exception as e:
         logging.error(f"Error parseando ISO {raw_iso}: {e}")
         return datetime.now(LIMA_TZ)
-
-def adjust_iso_minus_hours(raw_iso: str, hours: int):
-    base_dt = iso_to_dt(raw_iso)
-    adjusted = base_dt - timedelta(hours=hours)
-    return adjusted.strftime("%d/%m/%Y %H:%M:%S")
 
 def compute_surebet_stakes(odds_over, odds_under, stake_total):
     try:
@@ -138,16 +136,17 @@ def send_telegram(message: str):
 # Odds-API.io REQUESTS
 # ---------------------------------
 def fetch_events(from_date: str, to_date: str, status: str = STATUS_DEFAULT):
-    # Importante: esta API usa fromYYYY-MM-DD y toYYYY-MM-DD sin '='
+    """
+    Esta API usa fromYYYY-MM-DD y toYYYY-MM-DD (sin '=').
+    Devuelve directamente una lista de eventos.
+    """
     url = f"{EVENTS_BASE}?apiKey={ODDS_API_KEY}&sport={SPORT}&from{from_date}&to{to_date}&status={status}"
     try:
         r = requests.get(url, timeout=25)
         r.raise_for_status()
         data = r.json()
-        # Esta API devuelve directamente una lista de eventos
         if isinstance(data, list):
             return data
-        # Fallback defensivo si retornara dict
         if isinstance(data, dict):
             return data.get("data", [])
         return []
@@ -157,8 +156,8 @@ def fetch_events(from_date: str, to_date: str, status: str = STATUS_DEFAULT):
 
 def fetch_odds_live(event_id: str, bookmakers: list):
     """
-    Devuelve el objeto de cuotas para un eventId. La API puede retornar:
-      - dict con campos: id, home, away, date, bookmakers (dict por casa)
+    Devuelve el objeto de cuotas para un eventId.
+    La estructura real es un dict con 'bookmakers' como dict por casa.
     """
     params = {
         "apiKey": ODDS_API_KEY,
@@ -171,11 +170,10 @@ def fetch_odds_live(event_id: str, bookmakers: list):
         r = requests.get(ODDS_BASE, params=params, timeout=25)
         r.raise_for_status()
         payload = r.json()
-        # La estructura real que compartiste es un dict con "bookmakers" dict
         if isinstance(payload, dict):
             return payload
-        # Algunas variantes podrían devolver lista; tomamos el primer dict válido
         if isinstance(payload, list) and payload:
+            # en algunos casos pueden devolver lista; tomamos el primero dict
             return payload[0]
         return {}
     except requests.exceptions.HTTPError as e:
@@ -198,7 +196,7 @@ def fetch_odds_live(event_id: str, bookmakers: list):
 # ---------------------------------
 def extract_best_totals_25_v3(bookmakers_dict):
     """
-    Estructura:
+    Estructura esperada:
       bookmakers: {
         "Stake": [
           {"name":"Totals","updatedAt":"...","odds":[{"hdp":2.5,"over":"1.360","under":"2.600"}, ...]},
@@ -217,8 +215,7 @@ def extract_best_totals_25_v3(bookmakers_dict):
         for market in markets:
             if (market.get("name") or "").lower() == "totals":
                 for outcome in market.get("odds", []):
-                    hdp = outcome.get("hdp")
-                    if hdp == 2.5:
+                    if outcome.get("hdp") == 2.5:
                         over = outcome.get("over")
                         under = outcome.get("under")
                         try:
@@ -235,7 +232,71 @@ def extract_best_totals_25_v3(bookmakers_dict):
     return mejor_over, casa_over, mejor_under, casa_under
 
 # ---------------------------------
-# INSERT DB
+# PREMATCH: events from-to dinámico + odds por eventId + hora Lima
+# ---------------------------------
+def fetch_prematch_over25():
+    """
+    - from-to: hoy (zona Lima).
+    - events: status pending.
+    - odds: por eventId y LIVE_BOOKMAKERS, formato v3.
+    - commence_time: guardado en hora Lima (datetime aware).
+    - límite: EVENT_LIMIT para controlar rate.
+    """
+    today = datetime.now(LIMA_TZ).date().isoformat()
+    events = fetch_events(today, today, STATUS_DEFAULT)
+    resultados = []
+
+    for ev in events[:EVENT_LIMIT]:
+        ev_id = ev.get("id")
+        home = normalize_text(ev.get("home"))
+        away = normalize_text(ev.get("away"))
+
+        # Convertir date ISO UTC a datetime Lima (sin restar manualmente).
+        commence_dt_lima = iso_to_lima_dt(ev.get("date"))
+
+        # Traer odds del evento usando bookmakers configurables
+        odds_obj = fetch_odds_live(str(ev_id), LIVE_BOOKMAKERS)
+
+        mejor_over, casa_over, mejor_under, casa_under = None, None, None, None
+        if odds_obj and isinstance(odds_obj, dict) and "bookmakers" in odds_obj:
+            o_over, o_bk_over, o_under, o_bk_under = extract_best_totals_25_v3(odds_obj["bookmakers"])
+            mejor_over, casa_over, mejor_under, casa_under = o_over, o_bk_over, o_under, o_bk_under
+
+        # Cálculos auxiliares (para auditoría y alertas)
+        if mejor_over and mejor_under:
+            inv_sum = (1 / mejor_over) + (1 / mejor_under)
+            if inv_sum < 1:
+                stake_over = BASE_STAKE * (1 / mejor_over) / inv_sum
+                stake_under = BASE_STAKE * (1 / mejor_under) / inv_sum
+                ganancia = min(stake_over * mejor_over, stake_under * mejor_under) - BASE_STAKE
+                if ganancia > 5.0:
+                    send_telegram(
+                        f"🔥 Surebet Prematch!\n"
+                        f"{home} vs {away}\n"
+                        f"Fecha (Lima): {commence_dt_lima.strftime('%d/%m/%Y %H:%M:%S')}\n"
+                        f"Over 2.5: {mejor_over} ({casa_over}) → {stake_over:.2f}\n"
+                        f"Under 2.5: {mejor_under} ({casa_under}) → {stake_under:.2f}\n"
+                        f"Ganancia: {ganancia:.2f} con stake {BASE_STAKE}\n"
+                        f"Bookmakers: {', '.join(LIVE_BOOKMAKERS)}"
+                    )
+
+        resultados.append({
+            "evento": ev_id,
+            "local": home,
+            "visitante": away,
+            "commence_dt_lima": commence_dt_lima,
+            "cuota_over": mejor_over,
+            "casa_over": casa_over,
+            "cuota_under": mejor_under,
+            "casa_under": casa_under,
+            "created_at": commence_dt_lima,
+            "latest_bookmaker_update": commence_dt_lima
+        })
+
+    return resultados
+
+# ---------------------------------
+# INSERT DB (usa datetime aware directamente, sin AT TIME ZONE)
 # ---------------------------------
 def insert_matches(rows):
     ids = []
@@ -248,7 +309,6 @@ def insert_matches(rows):
         stake_under = None
         profit_abs = None
         profit_pct = None
-
         umbral_surebet = None
         cobertura_stake = None
         cobertura_resultado = None
@@ -263,7 +323,6 @@ def insert_matches(rows):
             stake_under = s_under
             profit_abs = p_abs
             profit_pct = p_pct
-
             try:
                 umbral_surebet = cuota_over / (cuota_over - 1)
                 cobertura_stake = (100 * cuota_over) / cuota_under
@@ -281,15 +340,13 @@ def insert_matches(rows):
             market, selection, created_at, updated_at, bet_placed, track_live
         )
         VALUES (
-            %s, %s, %s,
-            to_timestamp(%s, 'DD/MM/YYYY HH24:MI:SS') AT TIME ZONE 'America/Lima',
+            %s, %s, %s, %s,
             %s, %s,
             %s, %s,
             %s, %s, %s, %s, %s,
             %s, %s, %s,
             %s, %s,
-            to_timestamp(%s, 'DD/MM/YYYY HH24:MI:SS') AT TIME ZONE 'America/Lima',
-            to_timestamp(%s, 'DD/MM/YYYY HH24:MI:SS') AT TIME ZONE 'America/Lima',
+            %s, %s,
             TRUE, FALSE
         )
         ON CONFLICT (event_id, market, selection)
@@ -314,7 +371,7 @@ def insert_matches(rows):
             row["evento"],
             row["local"],
             row["visitante"],
-            row["fecha_hora"],  # ajustada -5h del campo 'date'
+            row["commence_dt_lima"],  # datetime aware Lima
             row.get("cuota_over"),
             row.get("casa_over"),
             row.get("cuota_under"),
@@ -324,13 +381,13 @@ def insert_matches(rows):
             stake_under,
             profit_abs,
             profit_pct,
-            row.get("umbral_surebet"),
-            row.get("cobertura_stake"),
-            row.get("cobertura_resultado"),
+            umbral_surebet,
+            cobertura_stake,
+            cobertura_resultado,
             "over_under",
             "over_2.5",
             row.get("created_at"),
-            row.get("latest_bookmaker_update")
+            row.get("latest_bookmaker_update"),
         )
 
         try:
@@ -340,89 +397,6 @@ def insert_matches(rows):
         except Exception as e:
             logging.error(f"DB insert error (event_id={row.get('evento')}): {e}")
     return ids
-
-# ---------------------------------
-# PREMATCH: events from-to dinámico + odds por eventId + ajuste date -5h
-# ---------------------------------
-def fetch_prematch_over25():
-    """
-    1) from-to se calcula dinámicamente (hoy) en zona Lima.
-    2) Trae events (status pending).
-    3) Para cada event, consulta odds con eventId y LIVE_BOOKMAKERS.
-    4) Ajusta el campo 'date' restando 5 horas antes de insertar.
-    5) Limita a EVENT_LIMIT eventos para controlar rate.
-    """
-    today = datetime.now(LIMA_TZ).date().isoformat()
-    events = fetch_events(today, today, STATUS_DEFAULT)
-    resultados = []
-
-    for ev in events[:EVENT_LIMIT]:
-        ev_id = ev.get("id")
-        home = normalize_text(ev.get("home"))
-        away = normalize_text(ev.get("away"))
-
-        # Campo 'date' del response: restar 5 horas ANTES de insertar
-        date_iso = ev.get("date")
-        fecha_hora_str = adjust_iso_minus_hours(date_iso, 5)
-
-        # Traer odds del evento usando bookmakers configurables
-        odds_obj = fetch_odds_live(str(ev_id), LIVE_BOOKMAKERS)
-
-        mejor_over, casa_over, mejor_under, casa_under = None, None, None, None
-        if odds_obj and isinstance(odds_obj, dict) and "bookmakers" in odds_obj:
-            o_over, o_bk_over, o_under, o_bk_under = extract_best_totals_25_v3(odds_obj["bookmakers"])
-            mejor_over, casa_over, mejor_under, casa_under = o_over, o_bk_over, o_under, o_bk_under
-
-        # Cálculos auxiliares (para auditoría)
-        umbral_surebet = None
-        cobertura_stake = None
-        cobertura_resultado = None
-        if mejor_over and mejor_under:
-            try:
-                umbral_surebet = mejor_over / (mejor_over - 1)
-                cobertura_stake = (100 * mejor_over) / mejor_under
-                cobertura_resultado = 100 * (mejor_over - 1) - cobertura_stake
-            except Exception as e:
-                logging.error(f"Error calculando umbral/cobertura (prematch): {e}")
-
-            # Alertas prematch si hay surebet > $5
-            inv_sum = (1/mejor_over) + (1/mejor_under)
-            if inv_sum < 1:
-                stake_over = BASE_STAKE * (1/mejor_over) / inv_sum
-                stake_under = BASE_STAKE * (1/mejor_under) / inv_sum
-                ganancia = min(stake_over * mejor_over, stake_under * mejor_under) - BASE_STAKE
-                if ganancia > 5.0:
-                    mensaje = (
-                        f"🔥 Surebet Prematch!\n"
-                        f"{home} vs {away}\n"
-                        f"Fecha (ajustada -5h): {fecha_hora_str}\n"
-                        f"Over 2.5: {mejor_over} ({casa_over}) → {stake_over:.2f}\n"
-                        f"Under 2.5: {mejor_under} ({casa_under}) → {stake_under:.2f}\n"
-                        f"Ganancia: {ganancia:.2f} con stake {BASE_STAKE}\n"
-                        f"Bookmakers: {', '.join(LIVE_BOOKMAKERS)}"
-                    )
-                    send_telegram(mensaje)
-
-        created_str = fecha_hora_str
-        updated_str = fecha_hora_str
-
-        resultados.append({
-            "evento": ev_id,
-            "local": home,
-            "visitante": away,
-            "fecha_hora": fecha_hora_str,  # ajustada -5h
-            "cuota_over": mejor_over,
-            "casa_over": casa_over,
-            "cuota_under": mejor_under,
-            "casa_under": casa_under,
-            "created_at": created_str,
-            "latest_bookmaker_update": updated_str,
-            "umbral_surebet": umbral_surebet,
-            "cobertura_stake": cobertura_stake,
-            "cobertura_resultado": cobertura_resultado
-        })
-
-    return resultados
 
 # ---------------------------------
 # Cobertura minimax
@@ -441,7 +415,7 @@ def cobertura_minimax_over_under(stake_over, cuota_over, cuota_under):
         return 0.0, None
 
 # ---------------------------------
-# MONITOR LIVE usando eventId + bookmakers
+# MONITOR LIVE usando eventId + bookmakers (formato v3)
 # ---------------------------------
 def monitor_live_and_notify():
     rows = db_exec("""
@@ -514,7 +488,7 @@ def monitor_live_and_notify():
                 send_telegram(msg)
 
 # ---------------------------------
-# CICLOS
+# CICLOS Y SCHEDULER
 # ---------------------------------
 _last_heartbeat = None
 
@@ -525,7 +499,7 @@ def heartbeat():
         _last_heartbeat = now
 
 def run_cycle_prematch(tag):
-    logging.info(f"[{tag}] Iniciando carga PREMATCH (from-to dinámico hoy, status={STATUS_DEFAULT}, limit={EVENT_LIMIT})")
+    logging.info(f"[{tag}] Iniciando PREMATCH (from-to hoy, status={STATUS_DEFAULT}, limit={EVENT_LIMIT})")
     rows = fetch_prematch_over25()
     ids = []
     try:
@@ -553,12 +527,12 @@ def run_threaded(job_func):
     job_thread.start()
 
 def main():
-    logging.info("Script iniciado (Odds-API.io events from-to + live odds por eventId/bookmakers, formato v3).")
+    logging.info("Script iniciado (Odds-API.io v3: events from-to + odds por eventId/bookmakers, hora Lima correcta).")
     # Ejecuta prematch inmediatamente
     run_threaded(job_prematch)
     # Schedulers
     schedule.every(15).minutes.do(run_threaded, job_prematch)
-    schedule.every(5).minutes.do(run_threaded, job_monitor)  # subimos a 5 min para evitar 429
+    schedule.every(5).minutes.do(run_threaded, job_monitor)  # 5 min para bajar presión de rate limit
 
     while True:
         schedule.run_pending()
