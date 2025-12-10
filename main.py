@@ -141,23 +141,15 @@ def send_telegram(message: str):
 # Odds-API.io REQUESTS
 # ---------------------------------
 def fetch_events(from_date: str, to_date: str, status: str = STATUS_DEFAULT):
-    """
-    Trae eventos entre from-to y filtrados por status: pending/live/settled.
-    """
-    params = {
-        "apiKey": ODDS_API_KEY,
-        "sport": SPORT,
-        "from": from_date,
-        "to": to_date,
-        "status": status
-    }
+    url = f"{EVENTS_BASE}?apiKey={ODDS_API_KEY}&sport={SPORT}&from{from_date}&to{to_date}&status={status}"
     try:
-        r = requests.get(EVENTS_BASE, params=params, timeout=25)
+        r = requests.get(url, timeout=25)
         r.raise_for_status()
         return r.json().get("data", [])
     except Exception as e:
         logging.error(f"Error consultando events from-to: {e}")
         return []
+
 
 def fetch_odds_live(event_id: str, bookmakers: list):
     """
