@@ -13,16 +13,12 @@ import os
 import pytz
 import unicodedata
 import schedule
-import threading
-from urllib.parse import urlparse, parse_qs
+
 # ---------------------------------
 # CONFIG
 # ---------------------------------
-SPORTMONKS_BASE = "https://api.sportmonks.com/v3/football"
-SPORTMONKS_TOKEN = "vCglzLkFonsx4mGHVGhvKnLqpOAtYxNRpfcruDQKU88ZfsXBPqES18dgsk2j"
-
-TG_TOKEN = "8252990863:AAEAN1qEh8xCwKT6-61rA1lp8nSHrHSFQLc"
-TG_CHAT  = "1206397833"
+TG_TOKEN = "TU_TELEGRAM_TOKEN"
+TG_CHAT  = "TU_CHAT_ID"
 
 PG_HOST = "dpg-d4b25nggjchc73f7d1o0-a"
 PG_PORT = 5432
@@ -30,95 +26,82 @@ PG_DB   = "surebet_db"
 PG_USER = "surebet_db_user"
 PG_PASS = "bphDIBxCdPckefLT0SIOpB2WCEtiCCMU"
 
-INSERT_HOUR = 15
-POLL_SECONDS = 300
 BASE_STAKE = 100.0
-MAX_STAKE = 500.0
 CURRENCY = "USD"
-
 LIMA_TZ = pytz.timezone("America/Lima")
+
+# Odds-API.io config
+ODDS_API_KEY = "TU_API_KEY"
+EVENTS_BASE = "https://api2.odds-api.io/v3/events"
+ODDS_BASE   = "https://api2.odds-api.io/v3/odds"
+SPORT = "football"
+STATUS_DEFAULT = "pending"  # pending, live, settled (o combinados "pending,live")
+
+# Bookmakers configurables para LIVE odds
+LIVE_BOOKMAKERS = ["Bet365", "Unibet"]
+
+# Cobertura parcial
+COVERAGE_RATIO = 0.7
 
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s | %(levelname)s | %(message)s",
     handlers=[
-        logging.FileHandler("surebet_sportmonks.log"),
+        logging.FileHandler("surebet_oddsapi.log"),
         logging.StreamHandler()
     ]
 )
 
 # ---------------------------------
-# UTILIDAD: imprimir todas las casas de apuesta
+# UTILIDADES
 # ---------------------------------
-# ---------------------------------
-# UTILIDAD: imprimir todas las casas de apuesta
-# ---------------------------------
-def print_bookmakers():
-    bookmakers = load_bookmakers_map()
-    logging.info("📋 Casas de apuesta disponibles (Sportmonks API):")
-    for bk_id, bk_name in sorted(bookmakers.items()):
-        logging.info(f"ID={bk_id} → {bk_name}")
 def normalize_text(text: str) -> str:
-    """
-    Normaliza un string eliminando acentos y caracteres especiales
-    que no son representables en WIN1252.
-    Ejemplo: 'Łódź' -> 'Lodz', 'São Paulo' -> 'Sao Paulo'
-    """
     if not text:
         return text
     return unicodedata.normalize("NFKD", text).encode("ascii", "ignore").decode("ascii")
 
-# ---------------------------------
-# BOOKMAKERS CONFIG
-# ---------------------------------
-def load_bookmakers_map():
-    all_bookmakers = []
-    page = 1
+def valid_odds(odds):
+    try:
+        return odds is not None and float(odds) > 1.01
+    except Exception:
+        return False
 
-    while True:
-        url = "https://api.sportmonks.com/v3/odds/bookmakers"
-        params = {"api_token": SPORTMONKS_TOKEN, "page": page}
+def iso_to_dt(raw_iso: str):
+    """
+    Convierte un ISO con 'Z' a datetime aware en zona Lima.
+    """
+    if not raw_iso:
+        return datetime.now(LIMA_TZ)
+    try:
+        dt_utc = datetime.fromisoformat(raw_iso.replace("Z", "+00:00"))
+        return dt_utc.astimezone(LIMA_TZ)
+    except Exception as e:
+        logging.error(f"Error parseando ISO {raw_iso}: {e}")
+        return datetime.now(LIMA_TZ)
 
-        full_url = f"{url}?api_token={SPORTMONKS_TOKEN}&page={page}"
-        #logging.info(f"🌐 Consumiento API bookmakers → {full_url}")
+def adjust_iso_minus_hours(raw_iso: str, hours: int):
+    """
+    Resta 'hours' al ISO (campo 'date' del response) y retorna string Lima 'DD/MM/YYYY HH:MM:SS'.
+    """
+    base_dt = iso_to_dt(raw_iso)
+    adjusted = base_dt - timedelta(hours=hours)
+    return adjusted.strftime("%d/%m/%Y %H:%M:%S")
 
-        try:
-            r = requests.get(url, params=params, timeout=20)
-            r.raise_for_status()
-            payload = r.json()
-        except Exception as e:
-            logging.error(f"❌ Error obteniendo bookmakers (page={page}): {e}")
-            break
-
-        data = payload.get("data", [])
-        pagination = payload.get("pagination", {})  # 👈 directo en raíz, no en meta
-
-        #logging.info(f"📄 Respuesta API page={page}: count={pagination.get('count')} "
-        #             f"per_page={pagination.get('per_page')} current_page={pagination.get('current_page')} "
-        #             f"has_more={pagination.get('has_more')} next_page={pagination.get('next_page')}")
-
-        all_bookmakers.extend(data)
-        #logging.info(f"✅ Bookmakers acumulados tras page={page}: {len(all_bookmakers)}")
-
-        # Condición de corte
-        if not pagination or not pagination.get("has_more"):
-            break
-
-        # Avanza a la siguiente página
-        page += 1
-
-    bookmaker_map = {
-        bk.get("id"): bk.get("name")
-        for bk in all_bookmakers
-        if bk.get("id") is not None and bk.get("name") is not None
-    }
-
-    logging.info(f"🎯 Bookmakers cargados: {len(bookmaker_map)} casas de apuesta (total crudo: {len(all_bookmakers)})")
-    return bookmaker_map
-    
-#BOOKMAKER_IDS = [8,24,26,33,35,84,100,127,140,216]
-BOOKMAKER_IDS = []
-BOOKMAKER_MAP = load_bookmakers_map()
+def compute_surebet_stakes(odds_over, odds_under, stake_total):
+    try:
+        inv_over = 1.0 / float(odds_over)
+        inv_under = 1.0 / float(odds_under)
+        implied_sum = inv_over + inv_under
+        stake_over = stake_total * (inv_over / implied_sum)
+        stake_under = stake_total * (inv_under / implied_sum)
+        payout_over = stake_over * float(odds_over)
+        payout_under = stake_under * float(odds_under)
+        profit_abs = min(payout_over, payout_under) - stake_total
+        profit_pct = profit_abs / stake_total if stake_total > 0 else 0.0
+        return implied_sum, stake_over, stake_under, profit_abs, profit_pct
+    except Exception as e:
+        logging.error(f"Error compute_surebet_stakes: {e}")
+        return 999.0, 0.0, 0.0, 0.0, 0.0
 
 # ---------------------------------
 # DB
@@ -155,221 +138,88 @@ def send_telegram(message: str):
         logging.error(f"Excepción Telegram: {e}")
 
 # ---------------------------------
-# SPORTMONKS REQUEST
+# Odds-API.io REQUESTS
 # ---------------------------------
-def sportmonks_request(endpoint, params=None):
-    if params is None:
-        params = {}
-    params["api_token"] = SPORTMONKS_TOKEN
-    url = f"{SPORTMONKS_BASE}{endpoint}"
+def fetch_events(from_date: str, to_date: str, status: str = STATUS_DEFAULT):
+    """
+    Trae eventos entre from-to y filtrados por status: pending/live/settled.
+    """
+    params = {
+        "apiKey": ODDS_API_KEY,
+        "sport": SPORT,
+        "from": from_date,
+        "to": to_date,
+        "status": status
+    }
     try:
-        r = requests.get(url, params=params, timeout=20)
+        r = requests.get(EVENTS_BASE, params=params, timeout=25)
         r.raise_for_status()
-        return r.json()
+        return r.json().get("data", [])
     except Exception as e:
-        logging.error(f"Error Sportmonks request {url}: {e}")
-        return {}
+        logging.error(f"Error consultando events from-to: {e}")
+        return []
 
-def valid_odds(odds):
-    try:
-        return odds is not None and float(odds) > 1.01
-    except Exception:
-        return False
-
-# ---------------------------------
-# UTILIDADES SUREBET
-# ---------------------------------
-def compute_surebet_stakes(odds_over, odds_under, stake_total):
-    try:
-        # Validaciones iniciales
-        if not odds_over or not odds_under:
-            return 999.0, 0.0, 0.0, 0.0, 0.0
-        if float(odds_over) <= 1.0 or float(odds_under) <= 1.0:
-            # cuotas inválidas (no pueden ser <=1)
-            return 999.0, 0.0, 0.0, 0.0, 0.0
-
-        inv_over = 1.0 / float(odds_over)
-        inv_under = 1.0 / float(odds_under)
-        implied_sum = inv_over + inv_under
-
-        if implied_sum <= 0:
-            return 999.0, 0.0, 0.0, 0.0, 0.0
-
-        stake_over = stake_total * (inv_over / implied_sum)
-        stake_under = stake_total * (inv_under / implied_sum)
-
-        payout_over = stake_over * float(odds_over)
-        payout_under = stake_under * float(odds_under)
-
-        profit_abs = min(payout_over, payout_under) - stake_total
-        profit_pct = profit_abs / stake_total if stake_total > 0 else 0.0
-
-        return implied_sum, stake_over, stake_under, profit_abs, profit_pct
-
-    except Exception as e:
-        logging.error(f"Error compute_surebet_stakes: {e}")
-        return 999.0, 0.0, 0.0, 0.0, 0.0
-
-def parse_datetime_safe(raw):
+def fetch_odds_live(event_id: str, bookmakers: list):
     """
-    Convierte un string de fecha del response de odds_data a formato Lima (+5 horas).
-    Soporta formatos con 'Z' y sin 'Z'.
+    Trae cuotas (live o prematch según disponibilidad) para un eventId,
+    filtrando por la lista configurable de bookmakers.
     """
-    if not raw:
-        return None
+    params = {
+        "apiKey": ODDS_API_KEY,
+        "eventId": event_id,
+        "bookmakers": ",".join(bookmakers),
+        "oddsFormat": "decimal",
+        "dateFormat": "iso",
+    }
     try:
-        if "Z" in raw:
-            dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
-        else:
-            dt = datetime.strptime(raw, "%Y-%m-%d %H:%M:%S")
-        return (dt.astimezone(LIMA_TZ) + timedelta(hours=5)).strftime("%d/%m/%Y %H:%M:%S")
+        r = requests.get(ODDS_BASE, params=params, timeout=25)
+        r.raise_for_status()
+        return r.json().get("data", [])
     except Exception as e:
-        logging.error(f"Error parseando fecha {raw}: {e}")
-        return None
+        logging.error(f"Error consultando odds eventId={event_id}: {e}")
+        return []
 
 # ---------------------------------
-# PREMATCH: mejores Over/Under 2.5 (marketId=7) + surebet prematch
+# EXTRACCIÓN DE OVER/UNDER 2.5
 # ---------------------------------
-def fetch_prematch_over25():
-    hoy = datetime.now(LIMA_TZ).date()
-    manana = hoy + timedelta(days=3)
-    base_url = f"{SPORTMONKS_BASE}/fixtures/between/{hoy.isoformat()}/{manana.isoformat()}"
-    page = 1
-    all_fixtures = []
+def extract_best_totals_25(match_obj):
+    """
+    Busca las mejores cuotas Over/Under 2.5:
+    data[] -> bookmakers[] -> markets[key='totals'] -> outcomes(name in over/under, point=2.5)
+    """
+    mejor_over, casa_over = None, None
+    mejor_under, casa_under = None, None
 
-    while True:
-        try:
-            url = f"{base_url}?api_token={SPORTMONKS_TOKEN}&page={page}&include=participants"
-            r = requests.get(url, timeout=20)
-            r.raise_for_status()
-            data = r.json()
-        except Exception as e:
-            logging.error(f"Error obteniendo fixtures (page={page}): {e}")
-            break
-
-        all_fixtures.extend(data.get("data", []))
-        pagination = data.get("pagination", {})
-        logging.info(f"✅ Fixtures acumulados tras page={page}: {len(all_fixtures)}")
-
-        if not pagination or not pagination.get("has_more"):
-            break
-        page += 1
-
-    resultados = []
-    for fixture in all_fixtures:
-        fixture_id = fixture.get("id")
-        participants = fixture.get("participants", [])
-        if len(participants) < 2:
-            continue
-
-        local = participants[0].get("name")
-        visitante = participants[1].get("name")
-
-        # fecha del partido
-        fecha_hora_raw = fixture.get("starting_at")
-        try:
-            dt = datetime.fromisoformat(fecha_hora_raw.replace("Z", "+00:00"))
-            fecha_hora_str = (dt.astimezone(LIMA_TZ) + timedelta(hours=5)).strftime("%d/%m/%Y %H:%M:%S")
-        except Exception:
-            fecha_hora_str = (datetime.now(LIMA_TZ) + timedelta(hours=5)).strftime("%d/%m/%Y %H:%M:%S")
-
-        odds_data = sportmonks_request(f"/odds/pre-match/fixtures/{fixture_id}/markets/7")
-
-        mejor_over, casa_over, created_over, updated_over = None, None, None, None
-        mejor_under, casa_under, created_under, updated_under = None, None, None, None
-
-        for outcome in odds_data.get("data", []):
-            bookmaker_id = outcome.get("bookmaker_id")
-            label = (outcome.get("label") or "").lower()
-            total_line = outcome.get("total")
-            cuota = outcome.get("value")
-
-            #if BOOKMAKER_IDS and bookmaker_id not in BOOKMAKER_IDS:
-            #    continue
-
-            try:
-                cuota = float(cuota)
-            except Exception:
-                continue
-
-            if label == "over" and total_line in {"2.5"}:
-                if mejor_over is None or cuota > mejor_over:
-                    mejor_over = cuota
-                    casa_over = BOOKMAKER_MAP.get(bookmaker_id, str(bookmaker_id))
-                    created_over = parse_datetime_safe(outcome.get("created_at"))
-                    updated_over = parse_datetime_safe(outcome.get("latest_bookmaker_update"))
-
-            if label == "under" and total_line in {"2.5"}:
-                if mejor_under is None or cuota > mejor_under:
-                    mejor_under = cuota
-                    casa_under = BOOKMAKER_MAP.get(bookmaker_id, str(bookmaker_id))
-                    created_under = parse_datetime_safe(outcome.get("created_at"))
-                    updated_under = parse_datetime_safe(outcome.get("latest_bookmaker_update"))
-
-        # elegir qué timestamps usar (si hay over y under, prioriza el más reciente)
-        created_str = created_over or created_under
-        updated_str = updated_over or updated_under
-
-        umbral_surebet, cobertura_stake, cobertura_resultado = None, None, None
-        if mejor_over and mejor_under:
-            umbral_surebet = mejor_over / (mejor_over - 1)
-            cobertura_stake = (100 * mejor_over) / mejor_under
-            cobertura_resultado = 100 * (mejor_over - 1) - cobertura_stake
-
-        resultados.append({
-            "evento": fixture_id,
-            "local": normalize_text(local),
-            "visitante": normalize_text(visitante),
-            "fecha_hora": fecha_hora_str,
-            "cuota_over": mejor_over,
-            "casa_over": normalize_text(casa_over),
-            "cuota_under": mejor_under,
-            "casa_under": normalize_text(casa_under),
-            "created_at": created_str,
-            "latest_bookmaker_update": updated_str,
-            "umbral_surebet": umbral_surebet,
-            "cobertura_stake": cobertura_stake,
-            "cobertura_resultado": cobertura_resultado,
-            "stopped": odds_data.get("stopped")
-        })
-
-        # ALERTA TELEGRAM extendida
-        if mejor_over and mejor_under:
-            inv_sum = (1/mejor_over) + (1/mejor_under)
-            if inv_sum < 1:
-                stake_over = BASE_STAKE * (1/mejor_over) / inv_sum
-                stake_under = BASE_STAKE * (1/mejor_under) / inv_sum
-                ganancia = min(stake_over * mejor_over, stake_under * mejor_under) - BASE_STAKE
-                if ganancia > 5.0:
-                    mensaje = (
-                        f"🔥 Surebet Prematch encontrado!\n"
-                        f"{local} vs {visitante}\n"
-                        f"Fecha: {fecha_hora_str}\n"
-                        f"Over 2.5: {mejor_over} ({casa_over}) → Apostar {stake_over:.2f}\n"
-                        f"Under 2.5: {mejor_under} ({casa_under}) → Apostar {stake_under:.2f}\n"
-                        f"Ganancia asegurada: {ganancia:.2f} con stake {BASE_STAKE}\n\n"
-                        f"📊 Umbral de surebet (Under mínimo): {umbral_surebet:.2f}\n"
-                        f"💰 Cobertura con 100 soles en Over: Apostar {cobertura_stake:.2f} al Under\n"
-                        f"Resultado neto asegurado: {cobertura_resultado:.2f} soles"
-                    )
-                    if odds_data.get("stopped") is False:
-                        send_telegram(mensaje)
-                        logging.info(f"Alerta enviada por Telegram: {mensaje}")
-                    else:
-                        logging.info(f"⏸️ Mercado detenido (stopped=True) para fixture {fixture_id}, alerta NO enviada.")
-
-    return resultados
+    for bookmaker in match_obj.get("bookmakers", []):
+        bk_name = normalize_text(bookmaker.get("title"))
+        for market in bookmaker.get("markets", []):
+            if market.get("key") == "totals":
+                for outcome in market.get("outcomes", []):
+                    name = (outcome.get("name") or "").lower()
+                    point = outcome.get("point")
+                    price = outcome.get("price")
+                    try:
+                        cuota = float(price)
+                    except Exception:
+                        continue
+                    if not valid_odds(cuota):
+                        continue
+                    if name == "over" and point == 2.5:
+                        if mejor_over is None or cuota > mejor_over:
+                            mejor_over, casa_over = cuota, bk_name
+                    if name == "under" and point == 2.5:
+                        if mejor_under is None or cuota > mejor_under:
+                            mejor_under, casa_under = cuota, bk_name
+    return mejor_over, casa_over, mejor_under, casa_under
 
 # ---------------------------------
-# INSERT DB: guarda mejores over/under, casas, surebet y stakes con BASE_STAKE
+# INSERT DB
 # ---------------------------------
-
 def insert_matches(rows):
     ids = []
     for row in rows:
         cuota_over = row.get("cuota_over")
         cuota_under = row.get("cuota_under")
-        stopped = row.get("stopped")  # 👈 lo leemos pero no lo guardamos en BD
 
         surebet_flag = False
         stake_over = None
@@ -377,7 +227,6 @@ def insert_matches(rows):
         profit_abs = None
         profit_pct = None
 
-        # nuevos campos
         umbral_surebet = None
         cobertura_stake = None
         cobertura_resultado = None
@@ -393,17 +242,12 @@ def insert_matches(rows):
             profit_abs = p_abs
             profit_pct = p_pct
 
-            # cálculo de umbral y cobertura
             try:
                 umbral_surebet = cuota_over / (cuota_over - 1)
                 cobertura_stake = (100 * cuota_over) / cuota_under
                 cobertura_resultado = 100 * (cuota_over - 1) - cobertura_stake
             except Exception as e:
                 logging.error(f"Error calculando umbral/cobertura: {e}")
-
-        # 👇 Si el mercado está detenido, el surebet se fuerza a False
-        if stopped is True:
-            surebet_flag = False
 
         q = """
         INSERT INTO matches (
@@ -448,19 +292,19 @@ def insert_matches(rows):
             row["evento"],
             row["local"],
             row["visitante"],
-            row["fecha_hora"],
+            row["fecha_hora"],  # ajustada -5h del campo 'date'
             row.get("cuota_over"),
             row.get("casa_over"),
             row.get("cuota_under"),
             row.get("casa_under"),
-            surebet_flag,   # 👈 ya condicionado por stopped
+            surebet_flag,
             stake_over,
             stake_under,
             profit_abs,
             profit_pct,
-            umbral_surebet,
-            cobertura_stake,
-            cobertura_resultado,
+            row.get("umbral_surebet"),
+            row.get("cobertura_stake"),
+            row.get("cobertura_resultado"),
             "over_under",
             "over_2.5",
             row.get("created_at"),
@@ -476,122 +320,115 @@ def insert_matches(rows):
     return ids
 
 # ---------------------------------
-# LIVE: inplay odds marketId=4 (Match Goals, línea 2.5) por fixture_id
+# PREMATCH: events from-to dinámico + odds por eventId + ajuste date -5h
 # ---------------------------------
-def fetch_live_under25(fixtures_ids):
-    eventos = []
-    for fixture_id in fixtures_ids:
-        odds_data = sportmonks_request(f"/odds/inplay/fixtures/{fixture_id}/markets/4")
-
-        for outcome in odds_data.get("data", []):
-            bookmaker_id = outcome.get("bookmaker_id")
-            label = (outcome.get("label") or "").lower()
-            total_line = outcome.get("total")
-            cuota = outcome.get("value")
-
-            if BOOKMAKER_IDS and bookmaker_id not in BOOKMAKER_IDS:
-                continue
-
-            if label == "under" and str(total_line) == "2.5":
-                try:
-                    cuota = float(cuota)
-                except Exception:
-                    continue
-
-                if valid_odds(cuota):
-                    eventos.append({
-                        "event_id": fixture_id,
-                        "bookmaker_name": BOOKMAKER_MAP.get(bookmaker_id, str(bookmaker_id)),
-                        "linea_total": "2.5",
-                        "cuota_under25": cuota
-                    })
-    return eventos
-
-def fetch_fixture_details(fixture_id):
+def fetch_prematch_over25():
     """
-    Consulta el estado y minuto actual de un fixture en Sportmonks.
-    Devuelve (state_id, match_minute).
+    1) from-to se calcula dinámicamente (hoy) en zona Lima.
+    2) Trae events (status pending).
+    3) Para cada event, consulta odds con eventId y LIVE_BOOKMAKERS.
+    4) Ajusta el campo 'date' restando 5 horas antes de insertar.
     """
-    # 👇 Ojo: aquí NO ponemos /football porque SPORTMONKS_BASE ya lo incluye
-    fixture_data = sportmonks_request(f"/fixtures/{fixture_id}", params={"include": "periods"})
-    data = fixture_data.get("data", {})
+    today = datetime.now(LIMA_TZ).date().isoformat()
+    events = fetch_events(today, today, STATUS_DEFAULT)
+    resultados = []
 
-    state_id = data.get("state_id")
+    for ev in events:
+        ev_id = ev.get("id")
+        home = normalize_text(ev.get("home_team"))
+        away = normalize_text(ev.get("away_team"))
 
-    match_minute = 0
-    periods = data.get("periods", [])
-    if periods:
-        try:
-            match_minute = int(periods[-1].get("minutes", 0))
-        except Exception:
-            match_minute = 0
+        # Campo 'date' del response (ISO). Restar 5 horas ANTES de insertar.
+        date_iso = ev.get("date")  # e.g. "2025-12-10T14:00:00Z"
+        fecha_hora_str = adjust_iso_minus_hours(date_iso, 5)
 
-    return state_id, match_minute
+        # Traer odds del evento usando bookmakers configurables
+        odds_payload = fetch_odds_live(str(ev_id), LIVE_BOOKMAKERS)
 
-def fetch_fixture_scores(fixture_id):
-    """
-    Consulta los goles actuales de un fixture en Sportmonks.
-    Devuelve (home_score, away_score).
-    """
-    fixture_data = sportmonks_request(f"/fixtures/{fixture_id}", params={"include": "scores"})
-    data = fixture_data.get("data", {})
+        # Extraer mejores cuotas Over/Under 2.5
+        mejor_over, casa_over, mejor_under, casa_under = None, None, None, None
+        for match_odds in odds_payload:
+            o_over, o_bk_over, o_under, o_bk_under = extract_best_totals_25(match_odds)
+            if o_over is not None and (mejor_over is None or o_over > mejor_over):
+                mejor_over, casa_over = o_over, o_bk_over
+            if o_under is not None and (mejor_under is None or o_under > mejor_under):
+                mejor_under, casa_under = o_under, o_bk_under
 
-    home_score, away_score = 0, 0
-    for s in data.get("scores", []):
-        if s.get("description") == "CURRENT":
-            if s["score"]["participant"] == "home":
-                home_score = s["score"]["goals"]
-            elif s["score"]["participant"] == "away":
-                away_score = s["score"]["goals"]
+        # Cálculos auxiliares
+        umbral_surebet = None
+        cobertura_stake = None
+        cobertura_resultado = None
+        if mejor_over and mejor_under:
+            try:
+                umbral_surebet = mejor_over / (mejor_over - 1)
+                cobertura_stake = (100 * mejor_over) / mejor_under
+                cobertura_resultado = 100 * (mejor_over - 1) - cobertura_stake
+            except Exception as e:
+                logging.error(f"Error calculando umbral/cobertura (prematch): {e}")
 
-    return home_score, away_score
+        # Alertas prematch si hay surebet > $5
+        if mejor_over and mejor_under:
+            inv_sum = (1/mejor_over) + (1/mejor_under)
+            if inv_sum < 1:
+                stake_over = BASE_STAKE * (1/mejor_over) / inv_sum
+                stake_under = BASE_STAKE * (1/mejor_under) / inv_sum
+                ganancia = min(stake_over * mejor_over, stake_under * mejor_under) - BASE_STAKE
+                if ganancia > 5.0:
+                    mensaje = (
+                        f"🔥 Surebet Prematch!\n"
+                        f"{home} vs {away}\n"
+                        f"Fecha (ajustada -5h): {fecha_hora_str}\n"
+                        f"Over 2.5: {mejor_over} ({casa_over}) → {stake_over:.2f}\n"
+                        f"Under 2.5: {mejor_under} ({casa_under}) → {stake_under:.2f}\n"
+                        f"Ganancia: {ganancia:.2f} con stake {BASE_STAKE}\n"
+                        f"Bookmakers: {', '.join(LIVE_BOOKMAKERS)}"
+                    )
+                    send_telegram(mensaje)
 
+        created_str = fecha_hora_str
+        updated_str = fecha_hora_str
 
-# Config opcional para cobertura parcial (0.0 a 1.0). Ej: 0.7 = 70% del minimax.
-COVERAGE_RATIO = 0.7
+        resultados.append({
+            "evento": ev_id,
+            "local": home,
+            "visitante": away,
+            "fecha_hora": fecha_hora_str,  # ajustada -5h
+            "cuota_over": mejor_over,
+            "casa_over": casa_over,
+            "cuota_under": mejor_under,
+            "casa_under": casa_under,
+            "created_at": created_str,
+            "latest_bookmaker_update": updated_str,
+            "umbral_surebet": umbral_surebet,
+            "cobertura_stake": cobertura_stake,
+            "cobertura_resultado": cobertura_resultado
+        })
 
+    return resultados
+
+# ---------------------------------
+# Cobertura minimax
+# ---------------------------------
 def cobertura_minimax_over_under(stake_over, cuota_over, cuota_under):
-    """
-    Calcula la cobertura minimax para un mercado Over/Under 2.5.
-    Devuelve (stake_under_opt, loss_max).
-
-    Parámetros:
-        stake_over (float): Stake ya apostado al Over 2.5.
-        cuota_over (float): Cuota del Over 2.5 (prematch).
-        cuota_under (float): Cuota del Under 2.5 (live).
-
-    Retorna:
-        stake_under_opt (float): Stake óptimo a apostar en el Under 2.5.
-        loss_max (float): Pérdida máxima asegurada con esa cobertura.
-    """
     try:
-        # Validaciones básicas
         if stake_over <= 0 or cuota_over <= 1 or cuota_under <= 1:
             return 0.0, None
-
-        # Fórmula de cobertura minimax:
-        # Queremos que el beneficio neto en ambos escenarios sea lo más equilibrado posible.
-        # Stake_under = (stake_over * cuota_over) / cuota_under
         stake_under_opt = (stake_over * cuota_over) / cuota_under
-
-        # Ganancia si gana Over
         ganancia_over = (stake_over * cuota_over) - stake_over - stake_under_opt
-
-        # Ganancia si gana Under
         ganancia_under = (stake_under_opt * cuota_under) - stake_under_opt - stake_over
-
-        # La pérdida máxima es el mínimo de ambas ganancias (si es negativo)
         loss_max = min(ganancia_over, ganancia_under)
-
         return stake_under_opt, loss_max
-
     except Exception as e:
         logging.error(f"Error en cobertura_minimax_over_under: {e}")
         return 0.0, None
+
+# ---------------------------------
+# MONITOR LIVE usando eventId + bookmakers
+# ---------------------------------
 def monitor_live_and_notify():
-    # --- BLOQUE ORIGINAL: partidos con track_live=TRUE ---
+    # Partidos con track_live=TRUE y apuesta colocada al Over 2.5
     rows = db_exec("""
-        SELECT id, event_id, home_team, away_team, odds_over, odds_under, stake_over, stake_under
+        SELECT id, event_id, home_team, away_team, odds_over, stake_over, commence_time
         FROM matches
         WHERE track_live=TRUE
           AND market='over_under'
@@ -601,150 +438,75 @@ def monitor_live_and_notify():
 
     if not rows:
         logging.info("No hay partidos con track_live=TRUE para monitorear.")
-    else:
-        fixture_ids = [r["event_id"] for r in rows]
-        prematch_index = {r["event_id"]: r for r in rows}
-        live_events = fetch_live_under25(fixture_ids)
-        if not live_events:
-            logging.info("No se obtuvieron odds UNDER 2.5 en vivo para los fixtures marcados.")
-        else:
-            for ev in live_events:
-                fixture_id = ev["event_id"]
-                under_live = float(ev.get("cuota_under25") or 0)
-                bookmaker_live_name = ev.get("bookmaker_name") or ""
-
-                # Estado y minuto
-                state_id, match_minute = fetch_fixture_details(fixture_id)
-                home_score, away_score = fetch_fixture_scores(fixture_id)
-
-                # Desactivar por estado (3–13)
-                if state_id is not None and 3 <= state_id <= 13:
-                    logging.info(f"Partido {fixture_id} con state_id={state_id}, se desactiva track_live.")
-                    db_exec("UPDATE matches SET track_live=FALSE WHERE event_id=%s", (fixture_id,))
-                    continue
-
-                # Ignorar después del minuto 30
-                if match_minute > 30:
-                    logging.info(f"Partido {fixture_id} minuto {match_minute}, se deja de monitorear.")
-                    db_exec("UPDATE matches SET track_live=FALSE WHERE event_id=%s", (fixture_id,))
-                    continue
-
-                pm = prematch_index.get(fixture_id)
-                if not pm:
-                    continue
-
-                match_id_db = pm["id"]
-                home = pm.get("home_team") or ""
-                away = pm.get("away_team") or ""
-                over_odds_prematch = float(pm.get("odds_over") or 0)
-                stake_over = float(pm.get("stake_over") or 0)
-
-                # ⚽️ Gol temprano
-                if (home_score + away_score) > 0 and match_minute <= 30:
-                    msg = (
-                        f"⚽️ GOL temprano en {home} vs {away} (min {match_minute}).\n"
-                        f"Marcador actual: {home_score}-{away_score}.\n"
-                        f"👉 Considerar CASHOUT."
-                    )
-                    send_telegram(msg)
-
-                    if stake_over > 0 and over_odds_prematch > 1 and under_live > 1:
-                        stake_under_opt, loss_max = cobertura_minimax_over_under(
-                            stake_over, over_odds_prematch, under_live
-                        )
-                        if stake_under_opt > 0:
-                            msg_alt = (
-                                f"⚖️ Si NO haces cashout:\n"
-                                f"⇒ Apostar {stake_under_opt:.2f} {CURRENCY} al Under 2.5 @ {under_live} ({bookmaker_live_name}).\n"
-                                f"Pérdida máxima ≈ {loss_max:.2f} {CURRENCY}."
-                            )
-                            send_telegram(msg_alt)
-
-                    db_exec("UPDATE matches SET track_live=FALSE WHERE event_id=%s", (fixture_id,))
-                    continue
-
-                # Lógica de surebet con BASE_STAKE
-                implied_sum, s_over, s_under, profit_abs, profit_pct = compute_surebet_stakes(
-                    over_odds_prematch, under_live, BASE_STAKE
-                )
-
-                if implied_sum < 1.0:
-                    msg = (
-                        f"🔥 Surebet LIVE {home} vs {away} (min {match_minute}).\n"
-                        f"Over 2.5 pre @ {over_odds_prematch} | Under 2.5 live @ {under_live} ({bookmaker_live_name}).\n"
-                        f"Stake base {BASE_STAKE:.2f} {CURRENCY} ⇒ Over: {s_over:.2f}, Under: {s_under:.2f}.\n"
-                        f"Profit esperado: {profit_abs:.2f} {CURRENCY} ({profit_pct*100:.2f}%)."
-                    )
-                    send_telegram(msg)
-                    db_exec("""
-                        INSERT INTO alerts (match_id, kind, message, profit_pct, profit_abs, created_at)
-                        VALUES (%s,%s,%s,%s,%s,NOW())
-                    """, (match_id_db, "surebet_live", msg, profit_pct, profit_abs))
-                else:
-                    if stake_over > 0 and over_odds_prematch > 1 and under_live > 1:
-                        stake_under_opt, loss_max = cobertura_minimax_over_under(stake_over, over_odds_prematch, under_live)
-                        stake_under_partial = round(stake_under_opt * COVERAGE_RATIO, 2) if stake_under_opt else 0.0
-                        msg = (
-                            f"🛡️ Cobertura minimax {home} vs {away} (min {match_minute}).\n"
-                            f"Over 2.5 prematch: stake {stake_over:.2f} @ {over_odds_prematch}.\n"
-                            f"Under 2.5 live: @ {under_live} ({bookmaker_live_name}).\n"
-                            f"⇒ Stake Under óptimo: {stake_under_opt:.2f} {CURRENCY} (pérdida máxima ≈ {loss_max:.2f} {CURRENCY}).\n"
-                            f"Alternativa parcial ({int(COVERAGE_RATIO*100)}%): {stake_under_partial:.2f} {CURRENCY}."
-                        )
-                        send_telegram(msg)
-
-    # --- NUEVO BLOQUE: buscar partidos de HOY por commence_time ---
-    hoy = datetime.now(LIMA_TZ).date()
-    partidos_hoy = db_exec("""
-    SELECT id, event_id, home_team, away_team, odds_over, odds_under
-    FROM matches
-    WHERE DATE(commence_time) = %s
-      AND commence_time BETWEEN (NOW() - INTERVAL '2 hours') AND (NOW() + INTERVAL '1 hour')
-      AND market='over_under'
-    """, (hoy,), fetch=True)
-
-
-    if not partidos_hoy:
-        logging.info("No hay partidos de hoy en la BD para buscar surebets.")
         return
 
-    fixture_ids_hoy = [r["event_id"] for r in partidos_hoy]
-    live_events_hoy = fetch_live_under25(fixture_ids_hoy)
-
-    for ev in live_events_hoy:
-        fixture_id = ev["event_id"]
-        under_live = float(ev.get("cuota_under25") or 0)
-        bookmaker_live_name = ev.get("bookmaker_name") or ""
-
-        state_id, match_minute = fetch_fixture_details(fixture_id)
-        if state_id is None or state_id not in (2,):  # 2 = Live
-            continue
-
-        pm = next((r for r in partidos_hoy if r["event_id"] == fixture_id), None)
-        if not pm:
-            continue
-
-        home = pm.get("home_team") or ""
-        away = pm.get("away_team") or ""
+    for pm in rows:
+        match_id_db = pm["id"]
+        event_id = str(pm["event_id"])
+        home = normalize_text(pm.get("home_team") or "")
+        away = normalize_text(pm.get("away_team") or "")
         over_odds_prematch = float(pm.get("odds_over") or 0)
+        stake_over = float(pm.get("stake_over") or 0)
+
+        # Minuto aproximado desde commence_time (guardado con la hora ajustada)
+        commence_dt = pm.get("commence_time")
+        if isinstance(commence_dt, datetime):
+            commence_lima = commence_dt.astimezone(LIMA_TZ)
+        else:
+            # en caso de que la columna no sea datetime (defensivo)
+            commence_lima = datetime.now(LIMA_TZ)
+        match_minute = max(0, int((datetime.now(LIMA_TZ) - commence_lima).total_seconds() / 60))
+
+        # Traer odds para este evento y bookmakers configurables
+        live_odds_payload = fetch_odds_live(event_id, LIVE_BOOKMAKERS)
+
+        # Extraer mejores cuotas actualizadas (under live, over best)
+        mejor_over, casa_over, mejor_under, casa_under = None, None, None, None
+        for match_odds in live_odds_payload:
+            o_over, o_bk_over, o_under, o_bk_under = extract_best_totals_25(match_odds)
+            if o_over is not None and (mejor_over is None or o_over > mejor_over):
+                mejor_over, casa_over = o_over, o_bk_over
+            if o_under is not None and (mejor_under is None or o_under > mejor_under):
+                mejor_under, casa_under = o_under, o_bk_under
+
+        # Necesitamos al menos el Under live y nuestro Over prematch
+        if not (mejor_under and over_odds_prematch > 1):
+            continue
 
         implied_sum, s_over, s_under, profit_abs, profit_pct = compute_surebet_stakes(
-            over_odds_prematch, under_live, BASE_STAKE
+            over_odds_prematch, mejor_under, BASE_STAKE
         )
 
         if implied_sum < 1.0:
             msg = (
-                f"🔥 Surebet HOY en vivo {home} vs {away} (min {match_minute}).\n"
-                f"Over 2.5 prematch @ {over_odds_prematch} | Under 2.5 live @ {under_live} ({bookmaker_live_name}).\n"
+                f"🔥 Surebet LIVE {home} vs {away} (min {match_minute}).\n"
+                f"Over 2.5 prematch @ {over_odds_prematch} | Under 2.5 live @ {mejor_under} ({casa_under}).\n"
                 f"Stake base {BASE_STAKE:.2f} {CURRENCY} ⇒ Over: {s_over:.2f}, Under: {s_under:.2f}.\n"
-                f"Profit esperado: {profit_abs:.2f} {CURRENCY} ({profit_pct*100:.2f}%)."
+                f"Profit esperado: {profit_abs:.2f} {CURRENCY} ({profit_pct*100:.2f}%).\n"
+                f"Bookmakers: {', '.join(LIVE_BOOKMAKERS)}"
             )
             send_telegram(msg)
             db_exec("""
                 INSERT INTO alerts (match_id, kind, message, profit_pct, profit_abs, created_at)
                 VALUES (%s,%s,%s,%s,%s,NOW())
-            """, (pm["id"], "surebet_live_today", msg, profit_pct, profit_abs))
-# CICLO PRINCIPAL
+            """, (match_id_db, "surebet_live", msg, profit_pct, profit_abs))
+        else:
+            # Sugerir cobertura si no hay surebet
+            if stake_over > 0 and over_odds_prematch > 1 and mejor_under > 1:
+                stake_under_opt, loss_max = cobertura_minimax_over_under(stake_over, over_odds_prematch, mejor_under)
+                stake_under_partial = round(stake_under_opt * COVERAGE_RATIO, 2) if stake_under_opt else 0.0
+                msg = (
+                    f"🛡️ Cobertura minimax {home} vs {away} (min {match_minute}).\n"
+                    f"Over 2.5 prematch: stake {stake_over:.2f} @ {over_odds_prematch}.\n"
+                    f"Under 2.5 live: @ {mejor_under} ({casa_under}).\n"
+                    f"⇒ Stake Under óptimo: {stake_under_opt:.2f} {CURRENCY} (pérdida máxima ≈ {loss_max:.2f} {CURRENCY}).\n"
+                    f"Alternativa parcial ({int(COVERAGE_RATIO*100)}%): {stake_under_partial:.2f} {CURRENCY}.\n"
+                    f"Bookmakers: {', '.join(LIVE_BOOKMAKERS)}"
+                )
+                send_telegram(msg)
+
+# ---------------------------------
+# CICLOS
 # ---------------------------------
 _last_heartbeat = None
 
@@ -752,47 +514,41 @@ def heartbeat():
     global _last_heartbeat
     now = datetime.now(LIMA_TZ)
     if _last_heartbeat is None or (now - _last_heartbeat) >= timedelta(minutes=30):
-        #send_telegram("Heartbeat: activo (prematch mkt7 + live mkt4).")
         _last_heartbeat = now
 
 def run_cycle_prematch(tag):
-    logging.info(f"Iniciando la carga de FIXTURE pre-match")
+    logging.info("Iniciando carga PREMATCH (from-to dinámico hoy, status=pending)")
     rows = fetch_prematch_over25()
     ids = []
     try:
         ids = insert_matches(rows)
-        logging.info(f"[{tag}] Se esta insertando a la BD : {len(ids)}")
+        logging.info(f"[{tag}] Insertados en BD: {len(ids)}")
     except Exception as e:
         logging.error(f"Error insert prematch: {e}")
     logging.info(f"[{tag}] Prematch Over/Under 2.5 procesados: {len(ids)}")
-    #send_telegram(f"[{tag}] Prematch Over/Under 2.5 en DB: {len(ids)}")
 
 def job_prematch():
     now = datetime.now(LIMA_TZ)
-    now_plus5 = now + timedelta(hours=5)
-    logging.info(f"[PREMATCH] Disparado job_prematch a las {now_plus5.strftime('%d/%m/%Y %H:%M:%S')}")
+    logging.info(f"[PREMATCH] Disparado job_prematch a las {now.strftime('%d/%m/%Y %H:%M:%S')}")
     run_cycle_prematch("CADA_15_MIN")
-    logging.info(f"[PREMATCH] Ejecutado ciclo prematch a las {now_plus5.strftime('%d/%m/%Y %H:%M:%S')}")
+    logging.info(f"[PREMATCH] Ejecutado ciclo prematch a las {now.strftime('%d/%m/%Y %H:%M:%S')}")
 
 def job_monitor():
     now = datetime.now(LIMA_TZ)
-    now_plus5 = now + timedelta(hours=5)
-    logging.info(f"[MONITOR] Disparado job_monitor a las {now_plus5.strftime('%d/%m/%Y %H:%M:%S')}")
+    logging.info(f"[MONITOR] Disparado job_monitor a las {now.strftime('%d/%m/%Y %H:%M:%S')}")
     monitor_live_and_notify()
     heartbeat()
-    logging.info(f"[MONITOR] Ejecutado monitoreo a las {now_plus5.strftime('%d/%m/%Y %H:%M:%S')}")
+    logging.info(f"[MONITOR] Ejecutado monitoreo a las {now.strftime('%d/%m/%Y %H:%M:%S')}")
 
 def run_threaded(job_func):
-    """Ejecuta cada job en un hilo independiente"""
     job_thread = threading.Thread(target=job_func)
     job_thread.start()
 
 def main():
-    logging.info("Script iniciado (Sportmonks v3 football).")
-    #print_bookmakers()
-    # Ejecutar prematch inmediatamente al inicio
+    logging.info("Script iniciado (Odds-API.io events from-to dinámico + live odds por eventId/bookmakers).")
+    # Ejecuta prematch inmediatamente
     run_threaded(job_prematch)
-    # 👇 cada tarea se dispara en paralelo
+    # Schedulers
     schedule.every(15).minutes.do(run_threaded, job_prematch)
     schedule.every(2).minutes.do(run_threaded, job_monitor)
 
@@ -801,13 +557,13 @@ def main():
         time.sleep(1)
 
 # ---------------------------------
-# FLASK (Render Web Service)
+# FLASK
 # ---------------------------------
 app = Flask(__name__)
 
 @app.route("/")
 def index():
-    return "Surebet bot (Sportmonks v3) is running."
+    return "Surebet bot (Odds-API.io) is running."
 
 @app.route("/health")
 def health():
