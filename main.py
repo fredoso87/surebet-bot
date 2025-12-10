@@ -17,8 +17,8 @@ import schedule
 # ---------------------------------
 # CONFIG
 # ---------------------------------
-TG_TOKEN = "TU_TELEGRAM_TOKEN"
-TG_CHAT  = "TU_CHAT_ID"
+TG_TOKEN = "8252990863:AAEAN1qEh8xCwKT6-61rA1lp8nSHrHSFQLc"
+TG_CHAT  = "1206397833"
 
 PG_HOST = "dpg-d4b25nggjchc73f7d1o0-a"
 PG_PORT = 5432
@@ -31,7 +31,7 @@ CURRENCY = "USD"
 LIMA_TZ = pytz.timezone("America/Lima")
 
 # Odds-API.io config
-ODDS_API_KEY = "TU_API_KEY"
+ODDS_API_KEY = "31a69749ed08a2878f08fc58d8c564bd411d14caaa81b8517515b7cc929cf683"
 EVENTS_BASE = "https://api2.odds-api.io/v3/events"
 ODDS_BASE   = "https://api2.odds-api.io/v3/odds"
 SPORT = "football"
