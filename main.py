@@ -141,15 +141,25 @@ def send_telegram(message: str):
 # Odds-API.io REQUESTS
 # ---------------------------------
 def fetch_events(from_date: str, to_date: str, status: str = STATUS_DEFAULT):
+    """
+    Endpoint requiere fromYYYY-MM-DD y toYYYY-MM-DD (sin '=').
+    Devuelve lista de eventos.
+    """
     url = f"{EVENTS_BASE}?apiKey={ODDS_API_KEY}&sport={SPORT}&from{from_date}&to{to_date}&status={status}"
     try:
         r = requests.get(url, timeout=25)
         r.raise_for_status()
-        return r.json().get("data", [])
+        data = r.json()
+        if isinstance(data, list):
+            return data
+        elif isinstance(data, dict):
+            # fallback por si algún día cambia
+            return data.get("data", [])
+        else:
+            return []
     except Exception as e:
         logging.error(f"Error consultando events from-to: {e}")
         return []
-
 
 def fetch_odds_live(event_id: str, bookmakers: list):
     """
@@ -166,7 +176,11 @@ def fetch_odds_live(event_id: str, bookmakers: list):
     try:
         r = requests.get(ODDS_BASE, params=params, timeout=25)
         r.raise_for_status()
-        return r.json().get("data", [])
+        # algunos endpoints devuelven {"data":[...]}, otros directamente lista
+        payload = r.json()
+        if isinstance(payload, dict):
+            return payload.get("data", [])
+        return payload if isinstance(payload, list) else []
     except Exception as e:
         logging.error(f"Error consultando odds eventId={event_id}: {e}")
         return []
@@ -327,11 +341,11 @@ def fetch_prematch_over25():
 
     for ev in events:
         ev_id = ev.get("id")
-        home = normalize_text(ev.get("home_team"))
-        away = normalize_text(ev.get("away_team"))
+        home = normalize_text(ev.get("home"))
+        away = normalize_text(ev.get("away"))
 
         # Campo 'date' del response (ISO). Restar 5 horas ANTES de insertar.
-        date_iso = ev.get("date")  # e.g. "2025-12-10T14:00:00Z"
+        date_iso = ev.get("date")  # e.g. "2025-12-10T17:15:00Z"
         fecha_hora_str = adjust_iso_minus_hours(date_iso, 5)
 
         # Traer odds del evento usando bookmakers configurables
@@ -358,8 +372,7 @@ def fetch_prematch_over25():
             except Exception as e:
                 logging.error(f"Error calculando umbral/cobertura (prematch): {e}")
 
-        # Alertas prematch si hay surebet > $5
-        if mejor_over and mejor_under:
+            # Alertas prematch si hay surebet > $5
             inv_sum = (1/mejor_over) + (1/mejor_under)
             if inv_sum < 1:
                 stake_over = BASE_STAKE * (1/mejor_over) / inv_sum
@@ -445,7 +458,6 @@ def monitor_live_and_notify():
         if isinstance(commence_dt, datetime):
             commence_lima = commence_dt.astimezone(LIMA_TZ)
         else:
-            # en caso de que la columna no sea datetime (defensivo)
             commence_lima = datetime.now(LIMA_TZ)
         match_minute = max(0, int((datetime.now(LIMA_TZ) - commence_lima).total_seconds() / 60))
 
