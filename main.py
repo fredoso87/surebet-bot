@@ -37,9 +37,9 @@ ODDS_BASE   = "https://api2.odds-api.io/v3/odds"
 SPORT = "football"
 STATUS_DEFAULT = "pending"
 
-LIVE_BOOKMAKERS = ["Bet365", "Unibet"]
+LIVE_BOOKMAKERS = ["Apuesta Total", "Betano"]
 COVERAGE_RATIO = 0.7
-EVENT_LIMIT = 50
+#EVENT_LIMIT = 50  # máximo eventos por ciclo
 
 logging.basicConfig(
     level=logging.INFO,
@@ -146,37 +146,47 @@ def fetch_events(from_date: str, to_date: str, status: str = STATUS_DEFAULT):
         logging.error(f"Error consultando events from-to: {e}")
         return []
 
+def chunk_list(lst, size=10):
+    """Divide una lista en trozos de tamaño size."""
+    for i in range(0, len(lst), size):
+        yield lst[i:i+size]
+
 def fetch_odds_multi(event_ids: list, bookmakers: list):
     """
-    Consulta cuotas en vivo para múltiples eventIds en una sola llamada.
+    Consulta cuotas en vivo para múltiples eventIds en lotes de 10.
     Devuelve un dict {eventId: odds_obj}.
     """
-    url = f"{ODDS_BASE}/multi"
-    params = {
-        "apiKey": ODDS_API_KEY,
-        "eventIds": ",".join(str(eid) for eid in event_ids),
-        "bookmakers": ",".join(bookmakers),
-        "oddsFormat": "decimal",
-        "dateFormat": "iso",
-    }
-    try:
-        r = requests.get(url, params=params, timeout=25)
-        r.raise_for_status()
-        payload = r.json()
-        # Se asume estructura: {"data": {"<eventId>": { ... odds obj ... }, ...}}
-        if isinstance(payload, dict):
-            return payload.get("data", {})
-        return {}
-    except Exception as e:
-        logging.error(f"Error consultando odds/multi: {e}")
-        return {}
+    results = {}
+    for batch in chunk_list(event_ids, 10):
+        url = f"{ODDS_BASE}/multi"
+        params = {
+            "apiKey": ODDS_API_KEY,
+            "eventIds": ",".join(str(eid) for eid in batch),
+            "bookmakers": ",".join(bookmakers),
+            "oddsFormat": "decimal",
+            "dateFormat": "iso",
+        }
+        try:
+            r = requests.get(url, params=params, timeout=25)
+            r.raise_for_status()
+            payload = r.json()
+            if isinstance(payload, dict):
+                data = payload.get("data", {})
+                if isinstance(data, dict):
+                    results.update(data)
+        except requests.exceptions.HTTPError as e:
+            status = e.response.status_code if hasattr(e, "response") and e.response is not None else None
+            logging.error(f"HTTP {status} en odds/multi batch {batch}: {e}")
+        except Exception as e:
+            logging.error(f"Error consultando odds/multi batch {batch}: {e}")
+    return results
 
 # ---------------------------------
 # EXTRACCIÓN DE OVER/UNDER 2.5
 # ---------------------------------
 def extract_best_totals_25_v3(bookmakers_dict):
     """
-    Recorre mercados "Totals" y toma la mejor cuota para hdp=2.5.
+    Recorre mercados 'Totals' y toma la mejor cuota para hdp=2.5.
     Retorna: (mejor_over, casa_over, mejor_under, casa_under)
     """
     mejor_over, casa_over = None, None
@@ -206,13 +216,13 @@ def extract_best_totals_25_v3(bookmakers_dict):
 # ---------------------------------
 def fetch_prematch_over25():
     """
-    Carga eventos del día y cuotas por lotes (odds/multi), calcula hora Lima.
+    Carga eventos del día y cuotas por lotes (odds/multi con chunks de 10),
+    calcula hora Lima y prepara filas para inserción.
     """
     today = datetime.now(LIMA_TZ).date().isoformat()
     events = fetch_events(today, today, STATUS_DEFAULT)
     resultados = []
-    # Limitar y extraer eventIds
-    selected_events = events[:EVENT_LIMIT]
+    selected_events = events
     event_ids = [ev.get("id") for ev in selected_events if ev.get("id") is not None]
     odds_multi = fetch_odds_multi(event_ids, LIVE_BOOKMAKERS)
 
@@ -224,26 +234,8 @@ def fetch_prematch_over25():
 
         odds_obj = odds_multi.get(str(ev_id), {})
         mejor_over, casa_over, mejor_under, casa_under = None, None, None, None
-        if odds_obj and "bookmakers" in odds_obj:
+        if isinstance(odds_obj, dict) and "bookmakers" in odds_obj:
             mejor_over, casa_over, mejor_under, casa_under = extract_best_totals_25_v3(odds_obj["bookmakers"])
-
-        # Opcional: alerta si hay surebet prematch con BASE_STAKE
-        if mejor_over and mejor_under:
-            inv_sum = (1.0 / mejor_over) + (1.0 / mejor_under)
-            if inv_sum < 1.0:
-                stake_over = BASE_STAKE * (1.0 / mejor_over) / inv_sum
-                stake_under = BASE_STAKE * (1.0 / mejor_under) / inv_sum
-                ganancia = min(stake_over * mejor_over, stake_under * mejor_under) - BASE_STAKE
-                if ganancia > 5.0:
-                    send_telegram(
-                        f"🔥 Surebet Prematch!\n"
-                        f"{home} vs {away}\n"
-                        f"Fecha (Lima): {commence_dt_lima.strftime('%d/%m/%Y %H:%M:%S')}\n"
-                        f"Over 2.5: {mejor_over} ({casa_over}) → {stake_over:.2f}\n"
-                        f"Under 2.5: {mejor_under} ({casa_under}) → {stake_under:.2f}\n"
-                        f"Ganancia: {ganancia:.2f} con stake {BASE_STAKE}\n"
-                        f"Bookmakers: {', '.join(LIVE_BOOKMAKERS)}"
-                    )
 
         resultados.append({
             "evento": ev_id,
@@ -265,13 +257,7 @@ def fetch_prematch_over25():
 def insert_matches(rows):
     """
     Inserta/actualiza filas en matches usando commence_time en hora Lima (datetime aware).
-    Asume columnas:
-      - event_id, home_team, away_team, commence_time timestamptz
-      - odds_over, bookmaker_over, odds_under, bookmaker_under
-      - surebet, stake_over, stake_under, profit_abs, profit_pct
-      - umbral_surebet, cobertura_stake, cobertura_resultado
-      - market, selection, created_at, updated_at, bet_placed, track_live
-      - clave única (event_id, market, selection)
+    Asume clave única (event_id, market, selection).
     """
     ids = []
     for row in rows:
@@ -392,13 +378,13 @@ def cobertura_minimax_over_under(stake_over, cuota_over, cuota_under):
         return 0.0, None
 
 # ---------------------------------
-# MONITOR LIVE (usa odds/multi)
+# MONITOR LIVE (usa odds/multi con chunks de 10)
 # ---------------------------------
 def monitor_live_and_notify():
     """
     Monitorea partidos con apuesta prematch Over 2.5 (track_live=TRUE).
-    Usa una sola llamada a odds/multi para todos los eventIds del lote.
-    Evalúa surebet en vivo; si no hay surebet, sugiere cobertura minimax.
+    Usa una sola llamada por lote a odds/multi para todos los eventIds (chunks de 10).
+    Evalúa surebet en vivo; si no hay, sugiere cobertura minimax.
     """
     rows = db_exec("""
         SELECT id, event_id, home_team, away_team, odds_over, stake_over, commence_time
@@ -413,7 +399,6 @@ def monitor_live_and_notify():
         logging.info("No hay partidos con track_live=TRUE para monitorear.")
         return
 
-    # Llamada por lotes a odds/multi
     event_ids = [str(r["event_id"]) for r in rows if r.get("event_id") is not None]
     odds_multi = fetch_odds_multi(event_ids, LIVE_BOOKMAKERS)
 
@@ -436,7 +421,7 @@ def monitor_live_and_notify():
         # Obtener cuotas del eventId desde la respuesta multi
         odds_obj = odds_multi.get(event_id, {})
         mejor_over, casa_over, mejor_under, casa_under = None, None, None, None
-        if odds_obj and isinstance(odds_obj, dict) and "bookmakers" in odds_obj:
+        if isinstance(odds_obj, dict) and "bookmakers" in odds_obj:
             mejor_over, casa_over, mejor_under, casa_under = extract_best_totals_25_v3(odds_obj["bookmakers"])
 
         # Validación mínima
@@ -520,7 +505,7 @@ def run_threaded(job_func):
     job_thread.start()
 
 def main():
-    logging.info("Script iniciado (Events + Odds/multi, hora Lima correcta, monitoreo y prematch).")
+    logging.info("Script iniciado (Events + Odds/multi con chunks de 10, hora Lima correcta, monitoreo y prematch).")
     # Ejecuta prematch inmediatamente
     run_threaded(job_prematch)
     # Schedulers
@@ -538,7 +523,7 @@ app = Flask(__name__)
 
 @app.route("/")
 def index():
-    return "Surebet bot (Odds-API.io v3 multi) is running."
+    return "Surebet bot (Odds-API.io v3 multi chunks=10) is running."
 
 @app.route("/health")
 def health():
