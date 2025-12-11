@@ -216,14 +216,18 @@ def extract_best_totals_25_v3(bookmakers_dict):
 # ---------------------------------
 def fetch_prematch_over25():
     """
-    Carga eventos del día y cuotas por lotes (odds/multi con chunks de 10),
+    Carga todos los eventos del día y cuotas por lotes (odds/multi con chunks de 10),
     calcula hora Lima y prepara filas para inserción.
     """
     today = datetime.now(LIMA_TZ).date().isoformat()
     events = fetch_events(today, today, STATUS_DEFAULT)
     resultados = []
+
+    # Usar todos los eventos
     selected_events = events
     event_ids = [ev.get("id") for ev in selected_events if ev.get("id") is not None]
+
+    # Llamada por lotes (chunks de 10 eventIds)
     odds_multi = fetch_odds_multi(event_ids, LIVE_BOOKMAKERS)
 
     for ev in selected_events:
@@ -477,7 +481,7 @@ def heartbeat():
         _last_heartbeat = now
 
 def run_cycle_prematch(tag):
-    logging.info(f"[{tag}] Iniciando PREMATCH (from-to hoy, status={STATUS_DEFAULT}, limit={EVENT_LIMIT})")
+    logging.info(f"[{tag}] Iniciando PREMATCH (from-to hoy, status={STATUS_DEFAULT}")
     rows = fetch_prematch_over25()
     ids = []
     try:
