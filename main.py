@@ -380,6 +380,7 @@ def monitor_live_and_notify():
     if not rows:
         logging.info("No hay partidos con track_live=TRUE para monitorear.")
         return
+    logging.info("encontro partidos a monitorear")
 
     for pm in rows:
         match_id_db = pm["id"]
@@ -397,11 +398,13 @@ def monitor_live_and_notify():
         match_minute = max(0, int((datetime.now(LIMA_TZ) - commence_lima).total_seconds() / 60))
 
         odds_obj = fetch_odds_live(event_id, LIVE_BOOKMAKERS)
+        logging.info(f"[DEBUG] odds_obj eventId={event_id}: {odds_obj}")
 
         mejor_over, casa_over, mejor_under, casa_under = None, None, None, None
         if odds_obj and isinstance(odds_obj, dict) and "bookmakers" in odds_obj:
             o_over, o_bk_over, o_under, o_bk_under = extract_best_totals_25_v3(odds_obj["bookmakers"])
             mejor_over, casa_over, mejor_under, casa_under = o_over, o_bk_over, o_under, o_bk_under
+        logging.info(f"entro  mejor_over={mejor_over} casa_over={casa_over} mejor_under={mejor_under} casa_under={casa_under}")
 
         if not (mejor_under and over_odds_prematch > 1):
             continue
@@ -409,7 +412,7 @@ def monitor_live_and_notify():
         implied_sum, s_over, s_under, profit_abs, profit_pct = compute_surebet_stakes(
             over_odds_prematch, mejor_under, BASE_STAKE
         )
-
+        logging.info("222")
         if implied_sum < 1.0:
             msg = (
                 f"🔥 Surebet LIVE {home} vs {away} (min {match_minute}).\n"
