@@ -375,7 +375,6 @@ def monitor_live_and_notify():
         WHERE track_live=TRUE
           AND market='over_under'
           AND selection='over_2.5'
-          AND bet_placed=TRUE
     """, fetch=True)
 
     if not rows:
