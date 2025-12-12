@@ -218,13 +218,15 @@ def fetch_prematch_over25():
     """
     Carga todos los eventos del día y cuotas por lotes (odds/multi con chunks de 10),
     calcula hora Lima y prepara filas para inserción.
+    Además, envía alertas de Telegram si detecta surebets prematch.
     """
     today = datetime.now(LIMA_TZ).date().isoformat()
     events = fetch_events(today, today, STATUS_DEFAULT)
     resultados = []
 
     # Usar todos los eventos
-    selected_events = events
+    #selected_events = events
+    selected_events = events[:50]
     event_ids = [ev.get("id") for ev in selected_events if ev.get("id") is not None]
 
     # Llamada por lotes (chunks de 10 eventIds)
@@ -235,11 +237,47 @@ def fetch_prematch_over25():
         home = normalize_text(ev.get("home"))
         away = normalize_text(ev.get("away"))
         commence_dt_lima = iso_to_lima_dt(ev.get("date"))
+        fecha_hora_str = commence_dt_lima.strftime("%d/%m/%Y %H:%M:%S")
 
         odds_obj = odds_multi.get(str(ev_id), {})
         mejor_over, casa_over, mejor_under, casa_under = None, None, None, None
         if isinstance(odds_obj, dict) and "bookmakers" in odds_obj:
             mejor_over, casa_over, mejor_under, casa_under = extract_best_totals_25_v3(odds_obj["bookmakers"])
+
+        # ALERTA TELEGRAM extendida
+        if mejor_over and mejor_under:
+            inv_sum = (1/mejor_over) + (1/mejor_under)
+            if inv_sum < 1:
+                stake_over = BASE_STAKE * (1/mejor_over) / inv_sum
+                stake_under = BASE_STAKE * (1/mejor_under) / inv_sum
+                ganancia = min(stake_over * mejor_over, stake_under * mejor_under) - BASE_STAKE
+
+                # Calcular métricas de cobertura
+                try:
+                    umbral_surebet = mejor_over / (mejor_over - 1)
+                    cobertura_stake = (100.0 * mejor_over) / mejor_under
+                    cobertura_resultado = 100.0 * (mejor_over - 1) - cobertura_stake
+                except Exception:
+                    umbral_surebet, cobertura_stake, cobertura_resultado = None, None, None
+
+                if ganancia > 5.0:
+                    mensaje = (
+                        f"🔥 Surebet Prematch encontrado!\n"
+                        f"{home} vs {away}\n"
+                        f"Fecha (Lima): {fecha_hora_str}\n"
+                        f"Over 2.5: {mejor_over} ({casa_over}) → Apostar {stake_over:.2f}\n"
+                        f"Under 2.5: {mejor_under} ({casa_under}) → Apostar {stake_under:.2f}\n"
+                        f"Ganancia asegurada: {ganancia:.2f} con stake {BASE_STAKE}\n\n"
+                        f"📊 Umbral de surebet (Under mínimo): {umbral_surebet:.2f}\n"
+                        f"💰 Cobertura con 100 soles en Over: Apostar {cobertura_stake:.2f} al Under\n"
+                        f"Resultado neto asegurado: {cobertura_resultado:.2f} soles"
+                    )
+                    # Si la API trae flag stopped, lo validamos
+                    if isinstance(odds_obj, dict) and odds_obj.get("stopped") is False:
+                        send_telegram(mensaje)
+                        logging.info(f"Alerta enviada por Telegram: {mensaje}")
+                    else:
+                        logging.info(f"⏸️ Mercado detenido (stopped=True) para fixture {ev_id}, alerta NO enviada.")
 
         resultados.append({
             "evento": ev_id,
@@ -254,6 +292,7 @@ def fetch_prematch_over25():
             "latest_bookmaker_update": commence_dt_lima
         })
     return resultados
+
 
 # ---------------------------------
 # INSERT DB
